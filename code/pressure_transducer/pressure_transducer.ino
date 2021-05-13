@@ -14,16 +14,24 @@
 #define SAMPLES_PER_SECOND 1
 #define PRECISION 2
 
+// Set to 1 to have info appear on the Serial Monitor when plugged into a computer.
+// During deployment, disable (set to 0) in order to save battery.
 #define ECHO_TO_SERIAL 1
 
+// Arduino pin for the error LED.
+//
 #define LED_PIN 7
+================================================================================
+// Pin used for detecting an alarm on the RTC to wake up the device from deep sleep.
 #define INTERRUPT_PIN 2 
 #define INTERRUPT_INTPIN 0
 #define SD_CS_PIN 8
 
-
+// Real Time Clock object.
 RTC_DS3231 rtc;
+// Used for writing data to the current day's log file on the SD card.
 File logfile;
+// Pressure sensor object.
 MS5803 sensor(ADDRESS_HIGH);
 
 DateTime now;
@@ -120,24 +128,24 @@ void loop() {
       logfile.println(temperature);
       logfile.flush();
       
-#     if ECHO_TO_SERIAL
-        Serial.print(now.year());
-        Serial.print(F("-"));
-        Serial.print(now.month());
-        Serial.print(F("-"));
-        Serial.print(now.day());
-        Serial.print(F(" @ "));
-        Serial.print(now.hour());
-        Serial.print(F(":"));
-        Serial.print(now.minute());
-        Serial.print(F(":"));
-        Serial.print(now.second());
-        Serial.print(F(", "));
-        Serial.print(strbuffer);
-        Serial.print(F(", "));
-        Serial.println(temperature);
-        Serial.flush();
-#     endif //ECHO_TO_SERIAL
+#if ECHO_TO_SERIAL
+      Serial.print(now.year());
+      Serial.print(F("-"));
+      Serial.print(now.month());
+      Serial.print(F("-"));
+      Serial.print(now.day());
+      Serial.print(F(" @ "));
+      Serial.print(now.hour());
+      Serial.print(F(":"));
+      Serial.print(now.minute());
+      Serial.print(F(":"));
+      Serial.print(now.second());
+      Serial.print(F(", "));
+      Serial.print(strbuffer);
+      Serial.print(F(", "));
+      Serial.println(temperature);
+      Serial.flush();
+#endif //ECHO_TO_SERIAL
       
       takeSample = false;
     }
@@ -165,18 +173,18 @@ void createDateCSV() {
   char filename[] = "YYYYMMDD.csv";
   logfile = SD.open(now.toString(filename), FILE_WRITE);
   if (!logfile) {
-#   if ECHO_TO_SERIAL
-      Serial.println(F("Couldn't create file."));
-#   endif
+#if ECHO_TO_SERIAL
+    Serial.println(F("Couldn't create file."));
+#endif
     error(4);
   }
   logfile.println(F("date,time,pressure,temperature"));
   logfile.flush();
-#   if ECHO_TO_SERIAL
-      Serial.print(F("Starting new file: ")); 
-      Serial.println(filename);
-      Serial.flush();
-#   endif
+#if ECHO_TO_SERIAL
+  Serial.print(F("Starting new file: ")); 
+  Serial.println(filename);
+  Serial.flush();
+#endif
 }
 
 
@@ -184,10 +192,10 @@ void createDateCSV() {
  * 
  */
 void deepSleep(const DateTime dt, Ds3231Alarm1Mode alarm_mode) {
-# if ECHO_TO_SERIAL
-    Serial.println(F("Entering deep sleep"));
-    Serial.flush();
-# endif
+#if ECHO_TO_SERIAL
+  Serial.println(F("Entering deep sleep"));
+  Serial.flush();
+#endif
   rtc.setAlarm1(dt, alarm_mode);
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   noInterrupts();
@@ -199,10 +207,10 @@ void deepSleep(const DateTime dt, Ds3231Alarm1Mode alarm_mode) {
   sleep_cpu();  
 
   rtc.clearAlarm(1);
-# if ECHO_TO_SERIAL
+#if ECHO_TO_SERIAL
   Serial.println(F("Exiting deep sleep"));
   Serial.flush();
-# endif
+#endif
 }
 
 /*
@@ -259,10 +267,10 @@ ISR(TIMER2_OVF_vect) {
  * 
  */
 void lightSleep() {
-# if ECHO_TO_SERIAL
+#if ECHO_TO_SERIAL
   Serial.println(F("Entering light sleep"));
   Serial.flush();
-# endif
+#endif
 
   // We have to make sure we don't re-enter power-save mode too quickly to
   // avoid unwanted behaviour.
@@ -282,10 +290,10 @@ void lightSleep() {
   
   sleep_disable();
 
-# if ECHO_TO_SERIAL
+#if ECHO_TO_SERIAL
   Serial.println(F("Exiting light sleep"));
   Serial.flush();
-# endif
+#endif
 }
 
 void error(short flashes) {
