@@ -7,25 +7,33 @@
 #include "RTClib.h"
 #include "SparkFun_MS5803_I2C.h"
 
-
+// The device will wait until this minute value to begin. Set a value less than
+// 0 to sample right away.
 #define START_MINUTE -1
+// Length of time to sample for.
 #define DATA_DURATION 1
+// Length of time to sleep after sampling for the above length of time.
 #define SLEEP_DURATION 1
+// Number of samples to take per second (NOT IMPLEMENTED)
 #define SAMPLES_PER_SECOND 1
+// Number of decimal places to keep for the pressure readings.
 #define PRECISION 2
 
-// Set to 1 to have info appear on the Serial Monitor when plugged into a computer.
-// During deployment, disable (set to 0) in order to save battery.
+// Set to 1 to have info appear on the Serial Monitor when plugged into a 
+// computer. Disable during deployment, (set to 0) in order to save battery.
 #define ECHO_TO_SERIAL 1
 
-// Arduino pin for the error LED.
-//
-#define LED_PIN 7
-================================================================================
-// Pin used for detecting an alarm on the RTC to wake up the device from deep sleep.
+#define ERROR_LED_PIN 7
+
+// This pin is used for detecting an alarm from the RTC and triggering an
+// interrupt to wake the device up.
 #define INTERRUPT_PIN 2 
+// Equivalent to digitalPinToInterrupt(2). Used in attachInterrupt() calls.
 #define INTERRUPT_INTPIN 0
+// Chip Select pin for the SD card reader.
 #define SD_CS_PIN 8
+
+// =============================================================================
 
 // Real Time Clock object.
 RTC_DS3231 rtc;
@@ -35,52 +43,85 @@ File logfile;
 MS5803 sensor(ADDRESS_HIGH);
 
 DateTime now;
+// Track the current day value to determine when a new day begins and when a new
+// CSV file must be started.
 uint8_t oldDay = 0;
+
+// When the device is active, it will sample at the specified frequency and go
+// into a light sleep between samples. When the device is inactive, it will go
+// into deep sleep until being awakened by an alarm pulse on the RTC.
+volatile bool active = true;
+// The device takes a sample whenver it is active and sampling. If it is active
+// but not sampling, then it will go into a light sleep.
 volatile bool sampling = true;
-volatile bool takeSample = true;
 
 
 void setup() {
+// Code between these if statements will only be run if ECHO_TO_SERIAL is not 0.
 #if ECHO_TO_SERIAL
   Serial.begin(9600);
 #endif
 
   pinMode(INTERRUPT_PIN, INPUT_PULLUP);
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+  pinMode(ERROR_LED_PIN, OUTPUT);
+  digitalWrite(ERROR_LED_PIN, LOW);
 
+  // Disable the Analog to Digital Converter to save power, as we don't use it
+  // here (the MS5803 uses its own).
   ADCSRA = 0;
+  wdt_disable();
 
+  // Test connection with the RTC. If it fails, then the error LED will blink
+  // once per second until the device is restarted.
   if (!rtc.begin()) {
 #if ECHO_TO_SERIAL
     Serial.println(F("RTC setup error"));
 #endif
     error(1);
   }
-  rtc.disable32K();
-  rtc.writeSqwPinMode(DS3231_OFF);
-  rtc.clearAlarm(1);
+  // If the RTC lost power and therefore lost track of time, it will light up 
+  // the LED for 2 seconds. While it is not necessary that the RTC has the right
+  // time, if multiple sensors are being deployed and are set to start all at the
+  // same time then this will warn the user that the sensors are not synchronized.
+  if (rtc.lostPower()) {
+#if ECHO_TO_SERIAL
+    Serial.println(F("RTC time not configured (lost power)"));
+#endif
+    digitalWrite(ERROR_LED_PIN, HIGH);
+    delay(2000);
+    digitalWrite(ERROR_LED_PIN, LOW);
+  }
+
+  // These features should be disabled initially to save power.
+  rtc.disable32K(); // 32KHz clock
+  rtc.writeSqwPinMode(DS3231_OFF); // Square wave output
+  rtc.clearAlarm(1); 
   rtc.disableAlarm(2);
 
-
+  // Test connection with the SD. If it fails, then the error LED will blink twice
+  // per second until the device is restarted.
   if (!SD.begin(SD_CS_PIN)) {
 #if ECHO_TO_SERIAL
     Serial.println(F("SD setup error"));
 #endif
-    error(3);
+    error(2);
   }
 
+  // Initialize the MS5803 pressure sensor.
   sensor.reset();
   sensor.begin();
   
   now = rtc.now();
   
+  // If a START_MINUTE value between 0 and 59 is set, the device will go into deep
+  // sleep until the current minute matches specified minute value. Otherwise, the
+  // device will start right away.
   if ((START_MINUTE >= 0) && (now.minute() != START_MINUTE)) {
 #if ECHO_TO_SERIAL
     Serial.println(F("Waiting for START_MINUTE"));
     Serial.flush();
-#endif // ECHO_TO_SERIAL
-    deepSleep(now + TimeSpan(0, 0, 60 - now.minute(), 0), DS3231_A1_Minute);
+#endif
+    deepSleep(now + TimeSpan(0, 0, (START_MINUTE - now.minute() + 60) % 60, 0), DS3231_A1_Minute);
   }
 
 #if ECHO_TO_SERIAL
@@ -88,28 +129,50 @@ void setup() {
   Serial.flush();
 #endif
   
-  enableTimer2();
-  attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
-  rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, DATA_DURATION, 0), DS3231_A1_Minute);
+  // Prepare to begin sampling.
+  enableTimer();
 }
-
 
 
 void loop() {
   now = rtc.now();
 
+  // Start a new CSV file each day.
   if (oldDay != now.day()) {
+    char filename[] = "YYYYMMDD.csv"; // The file name will follow this format.
+    
     logfile.close();
-    createDateCSV();
+    logfile = SD.open(now.toString(filename), FILE_WRITE);
+
+    // If there was an error creating the new log, the device will stop and blink
+    // three times per second until being restarted.
+    if (!logfile) {
+#if ECHO_TO_SERIAL
+      Serial.println(F("Couldn't create file."));
+#endif
+      error(3);
+    }
+    // Print a header for the file.
+    logfile.println(F("date,time,pressure,temperature"));
+    logfile.flush();
+#if ECHO_TO_SERIAL
+    Serial.print(F("Starting new file: ")); 
+    Serial.println(filename);
+    Serial.flush();
+#endif
     oldDay = now.day();
   }
 
-  if (sampling) {
-    if (takeSample) {
-      char strbuffer[PRECISION + 6];
+  // If active, the device will see whether it's time to take a sample. Otherwise,
+  // enter deep sleep.
+  if (active) {
+    if (sampling) {
+      char buffer[PRECISION + 6];
       double pressure = sensor.getPressure(ADC_4096);
       int temperature = sensor.getTemperature(CELSIUS, ADC_512); 
-      dtostrf(pressure, 4, PRECISION, strbuffer);
+      // Convert the pressure value to a string, as doubles are printed as ints
+      // to a logfile and we want to keep the fractional value.
+      dtostrf(pressure, 4, PRECISION, buffer);
           
       logfile.print(now.year());
       logfile.print(F("-"));
@@ -123,7 +186,7 @@ void loop() {
       logfile.print(F(":"));
       logfile.print(now.second());
       logfile.print(F(","));
-      logfile.print(strbuffer);
+      logfile.print(buffer);
       logfile.print(F(","));
       logfile.println(temperature);
       logfile.flush();
@@ -141,57 +204,37 @@ void loop() {
       Serial.print(F(":"));
       Serial.print(now.second());
       Serial.print(F(", "));
-      Serial.print(strbuffer);
+      Serial.print(buffer);
       Serial.print(F(", "));
       Serial.println(temperature);
       Serial.flush();
 #endif //ECHO_TO_SERIAL
       
-      takeSample = false;
+      sampling = false;
     }
+    // Enter light sleep briefly while waiting to take the next sample.
     lightSleep();
-  } else {
-    TIMSK2 = 0;
-    rtc.clearAlarm(1);
-    rtc.disable32K();
 
+  } else {
+    disableSampling();
+
+    // Enter deep sleep for the specified SLEEP_DURATION
     deepSleep(rtc.now() + TimeSpan(0, 0, SLEEP_DURATION, 0), DS3231_A1_Minute);
 
-    sampling = true;
-    takeSample = true;
-    enableTimer2();
-    attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
-    rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, DATA_DURATION, 0), DS3231_A1_Minute);
+    // Prepare to resume sampling.
+    enableTimer();
   }
-}
-
-/*
- * Create (or open if the file name already exists) a CSV for the current day.
- * Name is formatted as YYYYMMDD.csv.
- */
-void createDateCSV() {
-  char filename[] = "YYYYMMDD.csv";
-  logfile = SD.open(now.toString(filename), FILE_WRITE);
-  if (!logfile) {
-#if ECHO_TO_SERIAL
-    Serial.println(F("Couldn't create file."));
-#endif
-    error(4);
-  }
-  logfile.println(F("date,time,pressure,temperature"));
-  logfile.flush();
-#if ECHO_TO_SERIAL
-  Serial.print(F("Starting new file: ")); 
-  Serial.println(filename);
-  Serial.flush();
-#endif
 }
 
 
 /*
- * 
+ * Puts the device to sleep until being awakened by the RTC's alarm, which
+ * will be detected when pin D2 goes low. Arguments will be passed to (and
+ * are the same as) rtc.setAlarm1.
  */
 void deepSleep(const DateTime dt, Ds3231Alarm1Mode alarm_mode) {
+  byte temp1 = 0;
+  byte temp2 = 0;
 #if ECHO_TO_SERIAL
   Serial.println(F("Entering deep sleep"));
   Serial.flush();
@@ -201,7 +244,6 @@ void deepSleep(const DateTime dt, Ds3231Alarm1Mode alarm_mode) {
   noInterrupts();
   sleep_enable();
   attachInterrupt(INTERRUPT_INTPIN, deepSleepISR, LOW);
-  //wdt_disable();
   sleep_bod_disable();
   interrupts();
   sleep_cpu();  
@@ -227,14 +269,14 @@ void deepSleepISR() {
  */
 void stopSamplingISR() {
   detachInterrupt(INTERRUPT_INTPIN);
-  sampling = false;
+  active = false;
 }
 
 
 /*
  * 
  */
-void enableTimer2() {
+void enableTimer() {
   // Switching to an asynchronous clock source as described in section 18.9 
   // (Asynchronous Operation of Timer/Counter2) of the datasheet
   TIMSK2 = 0;
@@ -254,13 +296,25 @@ void enableTimer2() {
 
   // Set the timer to create an interrupt whenever it overflows.
   TIMSK2 = _BV(TOIE2);
+
+  active = true;
+  sampling = true;
+
+  attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
+  rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, DATA_DURATION, 0), DS3231_A1_Minute);
+}
+
+void disableSampling() {
+  TIMSK2 = 0;
+  rtc.disable32K();
+  rtc.clearAlarm(1);
 }
 
 /*
  * 
  */
 ISR(TIMER2_OVF_vect) {
-  takeSample = true;
+  sampling = true;
 }
 
 /*
@@ -283,7 +337,6 @@ void lightSleep() {
   // before sleeping, it would detatch and no longer run to wake up the device.
   noInterrupts();
   sleep_enable();
-  //wdt_disable();
   sleep_bod_disable();
   interrupts();
   sleep_cpu();
@@ -300,9 +353,9 @@ void error(short flashes) {
   int duration = 2000 / flashes;
   while (1) {
     for (uint8_t i = 0; i < flashes; i++) {
-      digitalWrite(LED_PIN, HIGH);
+      digitalWrite(ERROR_LED_PIN, HIGH);
       delay(duration);
-      digitalWrite(LED_PIN, LOW);
+      digitalWrite(ERROR_LED_PIN, LOW);
       delay(duration);
     }
     delay(1000);
