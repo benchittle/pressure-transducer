@@ -1,0 +1,362 @@
+EESchema Schematic File Version 4
+EELAYER 30 0
+EELAYER END
+$Descr A4 11693 8268
+encoding utf-8
+Sheet 1 1
+Title "Pressure Transducer DIY"
+Date ""
+Rev "1.0"
+Comp ""
+Comment1 ""
+Comment2 ""
+Comment3 ""
+Comment4 ""
+$EndDescr
+$Comp
+L MCU_Microchip_ATmega:ATmega328P-PU U?
+U 1 1 60A4646F
+P 2000 2400
+F 0 "U?" H 1450 2450 50  0000 R CNN
+F 1 "ATmega328P-PU" H 1450 2350 50  0000 R CNN
+F 2 "Package_DIP:DIP-28_W7.62mm" H 2000 2400 50  0001 C CIN
+F 3 "http://ww1.microchip.com/downloads/en/DeviceDoc/ATmega328_P%20AVR%20MCU%20with%20picoPower%20Technology%20Data%20Sheet%2040001984A.pdf" H 2000 2400 50  0001 C CNN
+	1    2000 2400
+	1    0    0    -1  
+$EndComp
+$Comp
+L Breakouts:DS3231_breakout A?
+U 1 1 60A4A9F0
+P 4800 2300
+F 0 "A?" H 4472 2259 50  0000 R CNN
+F 1 "DS3231_breakout" H 4472 2350 50  0000 R CNN
+F 2 "" H 4950 2300 50  0001 C CNN
+F 3 "" H 4950 2300 50  0001 C CNN
+	1    4800 2300
+	-1   0    0    1   
+$EndComp
+$Comp
+L Breakouts:SD_reader_breakout A?
+U 1 1 60A4BD05
+P 4800 1300
+F 0 "A?" H 4472 1259 50  0000 R CNN
+F 1 "SD_reader_breakout" H 4472 1350 50  0000 R CNN
+F 2 "" H 4800 1350 50  0001 C CNN
+F 3 "" H 4800 1350 50  0001 C CNN
+	1    4800 1300
+	-1   0    0    1   
+$EndComp
+Wire Wire Line
+	2000 900  2000 850 
+Wire Wire Line
+	2000 850  2050 850 
+Wire Wire Line
+	2100 850  2100 900 
+$Comp
+L power:VCC #PWR?
+U 1 1 60A55020
+P 2050 850
+F 0 "#PWR?" H 2050 700 50  0001 C CNN
+F 1 "VCC" H 2065 1023 50  0000 C CNN
+F 2 "" H 2050 850 50  0001 C CNN
+F 3 "" H 2050 850 50  0001 C CNN
+	1    2050 850 
+	1    0    0    -1  
+$EndComp
+Connection ~ 2050 850 
+Wire Wire Line
+	2050 850  2100 850 
+$Comp
+L power:GND #PWR?
+U 1 1 60A5AE12
+P 2000 3900
+F 0 "#PWR?" H 2000 3650 50  0001 C CNN
+F 1 "GND" H 2005 3727 50  0000 C CNN
+F 2 "" H 2000 3900 50  0001 C CNN
+F 3 "" H 2000 3900 50  0001 C CNN
+	1    2000 3900
+	1    0    0    -1  
+$EndComp
+$Comp
+L power:VCC #PWR?
+U 1 1 60A5B7BD
+P 2900 2700
+F 0 "#PWR?" H 2900 2550 50  0001 C CNN
+F 1 "VCC" V 2915 2828 50  0000 L CNN
+F 2 "" H 2900 2700 50  0001 C CNN
+F 3 "" H 2900 2700 50  0001 C CNN
+	1    2900 2700
+	0    1    1    0   
+$EndComp
+$Comp
+L Device:R R?
+U 1 1 60A5CBAB
+P 2750 2700
+F 0 "R?" V 2850 2700 50  0000 C CNN
+F 1 "10K" V 2750 2700 50  0000 C CNN
+F 2 "" V 2680 2700 50  0001 C CNN
+F 3 "~" H 2750 2700 50  0001 C CNN
+	1    2750 2700
+	0    1    1    0   
+$EndComp
+$Comp
+L power:VCC #PWR?
+U 1 1 60A5E4E8
+P 4400 1150
+F 0 "#PWR?" H 4400 1000 50  0001 C CNN
+F 1 "VCC" V 4415 1277 50  0000 L CNN
+F 2 "" H 4400 1150 50  0001 C CNN
+F 3 "" H 4400 1150 50  0001 C CNN
+	1    4400 1150
+	0    -1   -1   0   
+$EndComp
+$Comp
+L power:VCC #PWR?
+U 1 1 60A5FCEB
+P 4400 2450
+F 0 "#PWR?" H 4400 2300 50  0001 C CNN
+F 1 "VCC" V 4415 2577 50  0000 L CNN
+F 2 "" H 4400 2450 50  0001 C CNN
+F 3 "" H 4400 2450 50  0001 C CNN
+	1    4400 2450
+	0    -1   -1   0   
+$EndComp
+$Comp
+L power:GND #PWR?
+U 1 1 60A61B66
+P 4400 2550
+F 0 "#PWR?" H 4400 2300 50  0001 C CNN
+F 1 "GND" V 4405 2422 50  0000 R CNN
+F 2 "" H 4400 2550 50  0001 C CNN
+F 3 "" H 4400 2550 50  0001 C CNN
+	1    4400 2550
+	0    1    1    0   
+$EndComp
+$Comp
+L power:GND #PWR?
+U 1 1 60A62A6C
+P 4400 1050
+F 0 "#PWR?" H 4400 800 50  0001 C CNN
+F 1 "GND" V 4405 922 50  0000 R CNN
+F 2 "" H 4400 1050 50  0001 C CNN
+F 3 "" H 4400 1050 50  0001 C CNN
+	1    4400 1050
+	0    1    1    0   
+$EndComp
+Text GLabel 2600 1200 2    50   Input ~ 0
+CS
+Text GLabel 4400 1550 0    50   Input ~ 0
+CS
+Text GLabel 2600 1500 2    50   Input ~ 0
+MOSI
+Text GLabel 4400 1350 0    50   Input ~ 0
+MOSI
+Text GLabel 2600 1600 2    50   Input ~ 0
+MISO
+Text GLabel 2600 1700 2    50   Input ~ 0
+SCK
+Text GLabel 4400 1250 0    50   Input ~ 0
+MISO
+Text GLabel 4400 1450 0    50   Input ~ 0
+SCK
+Text GLabel 2600 1800 2    50   Input ~ 0
+32K
+Text GLabel 4400 2050 0    50   Input ~ 0
+32K
+Text GLabel 4400 2150 0    50   Input ~ 0
+Alarm1
+Text GLabel 2600 3000 2    50   Input ~ 0
+Alarm1
+Text GLabel 4400 2250 0    50   Input ~ 0
+SCL
+Text GLabel 4400 2350 0    50   Input ~ 0
+SDA
+Text GLabel 2600 2600 2    50   Input ~ 0
+SCL
+Text GLabel 2600 2500 2    50   Input ~ 0
+SDA
+$Comp
+L Device:R R?
+U 1 1 60A65BD9
+P 2750 3300
+F 0 "R?" V 2850 3300 50  0000 C CNN
+F 1 "220" V 2750 3300 50  0000 C CNN
+F 2 "" V 2680 3300 50  0001 C CNN
+F 3 "~" H 2750 3300 50  0001 C CNN
+	1    2750 3300
+	0    1    1    0   
+$EndComp
+$Comp
+L Device:LED D?
+U 1 1 60A679ED
+P 3050 3300
+F 0 "D?" H 3050 3400 50  0000 C CNN
+F 1 "ERR_LED_RED" H 3043 3136 50  0000 C CNN
+F 2 "" H 3050 3300 50  0001 C CNN
+F 3 "~" H 3050 3300 50  0001 C CNN
+	1    3050 3300
+	-1   0    0    1   
+$EndComp
+$Comp
+L power:GND #PWR?
+U 1 1 60A685DC
+P 3200 3300
+F 0 "#PWR?" H 3200 3050 50  0001 C CNN
+F 1 "GND" V 3205 3172 50  0000 R CNN
+F 2 "" H 3200 3300 50  0001 C CNN
+F 3 "" H 3200 3300 50  0001 C CNN
+	1    3200 3300
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Regulator_Linear:MCP1700-3302E_TO92 U?
+U 1 1 60A696A2
+P 5850 4000
+F 0 "U?" H 5850 3851 50  0000 C CNN
+F 1 "MCP1700-3302E_TO92" H 5850 3760 50  0000 C CNN
+F 2 "Package_TO_SOT_THT:TO-92_Inline" H 5850 3800 50  0001 C CIN
+F 3 "http://ww1.microchip.com/downloads/en/DeviceDoc/20001826D.pdf" H 5850 4000 50  0001 C CNN
+	1    5850 4000
+	1    0    0    -1  
+$EndComp
+$Comp
+L power:VCC #PWR?
+U 1 1 60A6B075
+P 6250 4000
+F 0 "#PWR?" H 6250 3850 50  0001 C CNN
+F 1 "VCC" V 6265 4128 50  0000 L CNN
+F 2 "" H 6250 4000 50  0001 C CNN
+F 3 "" H 6250 4000 50  0001 C CNN
+	1    6250 4000
+	0    1    1    0   
+$EndComp
+$Comp
+L power:+3.3V #PWR?
+U 1 1 60A6CDA5
+P 5450 4000
+F 0 "#PWR?" H 5450 3850 50  0001 C CNN
+F 1 "+3.3V" V 5465 4128 50  0000 L CNN
+F 2 "" H 5450 4000 50  0001 C CNN
+F 3 "" H 5450 4000 50  0001 C CNN
+	1    5450 4000
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Device:C C?
+U 1 1 60A6E1D5
+P 6200 3850
+F 0 "C?" H 6315 3896 50  0000 L CNN
+F 1 "1uF" H 6315 3805 50  0000 L CNN
+F 2 "" H 6238 3700 50  0001 C CNN
+F 3 "~" H 6200 3850 50  0001 C CNN
+	1    6200 3850
+	1    0    0    -1  
+$EndComp
+$Comp
+L Device:C C?
+U 1 1 60A6FB20
+P 5500 3850
+F 0 "C?" H 5300 3900 50  0000 L CNN
+F 1 "1uF" H 5250 3800 50  0000 L CNN
+F 2 "" H 5538 3700 50  0001 C CNN
+F 3 "~" H 5500 3850 50  0001 C CNN
+	1    5500 3850
+	1    0    0    -1  
+$EndComp
+Wire Wire Line
+	5450 4000 5500 4000
+Connection ~ 5500 4000
+Wire Wire Line
+	5500 4000 5550 4000
+Wire Wire Line
+	6150 4000 6200 4000
+Connection ~ 6200 4000
+Wire Wire Line
+	6200 4000 6250 4000
+Wire Wire Line
+	5500 3700 5850 3700
+Connection ~ 5850 3700
+Wire Wire Line
+	5850 3700 6200 3700
+$Comp
+L power:GND #PWR?
+U 1 1 60A70CA4
+P 5850 3700
+F 0 "#PWR?" H 5850 3450 50  0001 C CNN
+F 1 "GND" H 5855 3527 50  0000 C CNN
+F 2 "" H 5850 3700 50  0001 C CNN
+F 3 "" H 5850 3700 50  0001 C CNN
+	1    5850 3700
+	-1   0    0    1   
+$EndComp
+$Comp
+L power:GND #PWR?
+U 1 1 60A7E62F
+P 4450 4000
+F 0 "#PWR?" H 4450 3750 50  0001 C CNN
+F 1 "GND" V 4455 3872 50  0000 R CNN
+F 2 "" H 4450 4000 50  0001 C CNN
+F 3 "" H 4450 4000 50  0001 C CNN
+	1    4450 4000
+	0    1    1    0   
+$EndComp
+$Comp
+L power:+3.3V #PWR?
+U 1 1 60A7F743
+P 4450 3900
+F 0 "#PWR?" H 4450 3750 50  0001 C CNN
+F 1 "+3.3V" V 4465 4028 50  0000 L CNN
+F 2 "" H 4450 3900 50  0001 C CNN
+F 3 "" H 4450 3900 50  0001 C CNN
+	1    4450 3900
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Connector:Conn_01x04_Female J?
+U 1 1 60A81908
+P 4700 3200
+F 0 "J?" H 4728 3176 50  0000 L CNN
+F 1 "PinHeader_Female_MS5803" H 4728 3085 50  0000 L CNN
+F 2 "" H 4700 3200 50  0001 C CNN
+F 3 "~" H 4700 3200 50  0001 C CNN
+	1    4700 3200
+	1    0    0    -1  
+$EndComp
+$Comp
+L Connector:Conn_01x02_Female J?
+U 1 1 60A7261D
+P 4650 3900
+F 0 "J?" H 4500 4000 50  0000 L CNN
+F 1 "JST_Power_Connector_Female" H 3950 3700 50  0000 L CNN
+F 2 "" H 4650 3900 50  0001 C CNN
+F 3 "~" H 4650 3900 50  0001 C CNN
+	1    4650 3900
+	1    0    0    -1  
+$EndComp
+$Comp
+L power:GND #PWR?
+U 1 1 60A83F38
+P 4500 3100
+F 0 "#PWR?" H 4500 2850 50  0001 C CNN
+F 1 "GND" V 4505 2972 50  0000 R CNN
+F 2 "" H 4500 3100 50  0001 C CNN
+F 3 "" H 4500 3100 50  0001 C CNN
+	1    4500 3100
+	0    1    1    0   
+$EndComp
+$Comp
+L power:VCC #PWR?
+U 1 1 60A85149
+P 4500 3200
+F 0 "#PWR?" H 4500 3050 50  0001 C CNN
+F 1 "VCC" V 4515 3327 50  0000 L CNN
+F 2 "" H 4500 3200 50  0001 C CNN
+F 3 "" H 4500 3200 50  0001 C CNN
+	1    4500 3200
+	0    -1   -1   0   
+$EndComp
+Text GLabel 4500 3400 0    50   Input ~ 0
+SCL
+Text GLabel 4500 3300 0    50   Input ~ 0
+SDA
+$EndSCHEMATC
