@@ -22,9 +22,9 @@
 
 // Set to 1 to have info appear on the Serial Monitor when plugged into a 
 // computer. Disable during deployment, (set to 0) in order to save battery.
-#define ECHO_TO_SERIAL 1
+#define ECHO_TO_SERIAL 0
 
-#define ERROR_LED_PIN 7
+#define ERROR_LED_PIN 4
 
 // This pin is used for detecting an alarm from the RTC and triggering an
 // interrupt to wake the device up.
