@@ -268,7 +268,7 @@ U 1 1 60ADE41D
 P 8650 1200
 F 0 "C4" V 8700 1050 50  0000 L CNN
 F 1 "0.1uF" V 8500 1050 50  0000 L CNN
-F 2 "Capacitor_SMD:C_0805_2012Metric" H 8688 1050 50  0001 C CNN
+F 2 "Capacitor_SMD:C_0402_1005Metric" H 8688 1050 50  0001 C CNN
 F 3 "~" H 8650 1200 50  0001 C CNN
 	1    8650 1200
 	0    1    1    0   
@@ -362,7 +362,7 @@ U 1 1 60AEE366
 P 1000 1100
 F 0 "C1" H 1100 1050 50  0000 L CNN
 F 1 "0.1uF" H 1100 1150 50  0000 L CNN
-F 2 "Capacitor_SMD:C_0805_2012Metric" H 1038 950 50  0001 C CNN
+F 2 "Capacitor_SMD:C_0402_1005Metric" H 1038 950 50  0001 C CNN
 F 3 "~" H 1000 1100 50  0001 C CNN
 	1    1000 1100
 	-1   0    0    1   
@@ -401,7 +401,7 @@ Text GLabel 4100 1900 2    50   Input ~ 0
 32KHz
 Text GLabel 9400 1900 2    50   Input ~ 0
 ~INT
-Text GLabel 4550 3200 2    50   Input ~ 0
+Text GLabel 3300 3200 2    50   Input ~ 0
 ~INT
 Connection ~ 3900 1900
 Wire Wire Line
@@ -584,7 +584,7 @@ U 1 1 60B62E92
 P 8500 4150
 F 0 "C3" H 8300 4100 50  0000 L CNN
 F 1 "0.1uF" H 8200 4200 50  0000 L CNN
-F 2 "Capacitor_SMD:C_0805_2012Metric" H 8500 4150 50  0001 C CNN
+F 2 "Capacitor_SMD:C_0402_1005Metric" H 8500 4150 50  0001 C CNN
 F 3 "~" H 8500 4150 50  0001 C CNN
 	1    8500 4150
 	1    0    0    -1  
@@ -604,7 +604,7 @@ U 1 1 609C012B
 P 6550 800
 F 0 "J2" V 6600 1000 50  0000 C CNN
 F 1 "MS5803_HDR" V 6500 750 50  0000 C CNN
-F 2 "Connector_JST:JST_PH_S5B-PH-K_1x05_P2.00mm_Horizontal" H 6550 800 50  0001 C CNN
+F 2 "Connector_JST:JST_PH_S4B-PH-K_1x04_P2.00mm_Horizontal" H 6550 800 50  0001 C CNN
 F 3 "~" H 6550 800 50  0001 C CNN
 	1    6550 800 
 	0    1    1    0   
@@ -633,31 +633,6 @@ F 1 "GND" V 6650 800 50  0000 C CNN
 F 2 "" H 6650 1000 50  0001 C CNN
 F 3 "" H 6650 1000 50  0001 C CNN
 	1    6650 1000
-	1    0    0    -1  
-$EndComp
-Wire Wire Line
-	4300 3200 4550 3200
-Connection ~ 4300 3200
-Wire Wire Line
-	4300 2200 4500 2200
-Connection ~ 4300 2200
-Wire Wire Line
-	3200 3200 4300 3200
-Wire Wire Line
-	3900 2200 4300 2200
-Wire Wire Line
-	4300 2250 4300 2200
-Wire Wire Line
-	4300 2550 4300 3200
-$Comp
-L Device:R R5
-U 1 1 60B25EED
-P 4300 2400
-F 0 "R5" H 4400 2300 50  0000 C CNN
-F 1 "10K" V 4300 2400 50  0000 C CNN
-F 2 "Resistor_SMD:R_0805_2012Metric" V 4230 2400 50  0001 C CNN
-F 3 "~" H 4300 2400 50  0001 C CNN
-	1    4300 2400
 	1    0    0    -1  
 $EndComp
 $Comp
@@ -697,15 +672,13 @@ Text GLabel 5600 1000 3    50   Input ~ 0
 MCU_RX
 Text GLabel 5500 1000 3    50   Input ~ 0
 MCU_TX
-Text GLabel 5350 1200 3    50   Input ~ 0
-DTR
 $Comp
 L Device:C_Small C2
 U 1 1 60ABDED5
 P 5350 1100
 F 0 "C2" H 5150 1050 50  0000 L CNN
 F 1 "0.1uF" H 5050 1150 50  0000 L CNN
-F 2 "Capacitor_SMD:C_0805_2012Metric" H 5350 1100 50  0001 C CNN
+F 2 "Capacitor_SMD:C_0402_1005Metric" H 5350 1100 50  0001 C CNN
 F 3 "~" H 5350 1100 50  0001 C CNN
 	1    5350 1100
 	1    0    0    -1  
@@ -713,7 +686,7 @@ $EndComp
 Wire Wire Line
 	5350 1000 5400 1000
 Text GLabel 3450 2800 2    50   Input ~ 0
-DTR
+~RESET
 Wire Wire Line
 	3300 2800 3450 2800
 Connection ~ 3300 2800
@@ -755,4 +728,10 @@ F 3 "" H 9250 5600 50  0001 C CNN
 	1    9250 5600
 	0    -1   -1   0   
 $EndComp
+Wire Wire Line
+	3900 2200 4500 2200
+Wire Wire Line
+	3200 3200 3300 3200
+Text GLabel 5350 1200 3    50   Input ~ 0
+~RESET
 $EndSCHEMATC
