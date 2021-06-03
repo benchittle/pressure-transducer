@@ -1,6 +1,6 @@
 #include <Wire.h>
 #include <SPI.h>
-#include <SD.h>
+#include <SdFat.h>
 #include <avr/sleep.h>
 #include <avr/wdt.h>
 
@@ -9,14 +9,14 @@
 
 // The device will wait until this minute value to begin. Set a value less than
 // 0 to sample right away.
-#define START_MINUTE -1
-// Length of time to sample for.
-#define DATA_DURATION 1
-// Length of time to sleep after sampling for the above length of time. Set to
-// 0 for continuous sampling.
+#define START_MINUTE 60
+// Default length of time to sample for.
+#define DATA_DURATION 2
+// Default length of time to sleep after sampling for the above length of time.
+// Set to 0 for continuous sampling.
 #define SLEEP_DURATION 1
-// Number of samples to take per second (NOT IMPLEMENTED)
-#define SAMPLES_PER_SECOND 1
+// Default number of samples to take per second (NOT IMPLEMENTED)
+//#define SAMPLES_PER_SECOND 1
 // Number of decimal places to keep for the pressure readings.
 #define PRECISION 2
 
@@ -39,7 +39,8 @@
 // Real Time Clock object.
 RTC_DS3231 rtc;
 // Used for writing data to the current day's log file on the SD card.
-File logfile;
+SdFat sd;
+SdFile logfile;
 // Pressure sensor object.
 MS5803 sensor(ADDRESS_HIGH);
 
@@ -47,6 +48,12 @@ DateTime now;
 // Track the current day value to determine when a new day begins and when a new
 // CSV file must be started.
 uint8_t oldDay = 0;
+
+// These values will be obtained from the config.txt file on the SD card if it
+// exists. Otherwise, they will be set to the corresponding default values 
+// above.
+uint16_t dataDuration;
+uint16_t sleepDuration;
 
 // When the device is active, it will sample at the specified frequency and go
 // into a light sleep between samples. When the device is inactive, it will go
@@ -73,6 +80,7 @@ void setup() {
   // Disable the Analog to Digital Converter to save power, as we don't use it
   // here (the MS5803 uses its own).
   ADCSRA = 0;
+  ACSR = _BV(ACD); // Analog comparator.
   wdt_disable(); // Also disable the watchdog timer.
 
   // Test connection with the RTC. If it fails, then the error LED will blink
@@ -85,16 +93,14 @@ void setup() {
   }
 
   // If the RTC lost power and therefore lost track of time, it will light up 
-  // the LED for 2 seconds. While it is not necessary that the RTC has the right
+  // the LED for 1 second. While it is not necessary that the RTC has the right
   // time, if multiple sensors are being deployed and are meant to start at the
   // same time, this will warn the user that the sensors are not synchronized.
   if (rtc.lostPower()) {
 #if ECHO_TO_SERIAL
     Serial.println(F("RTC time not configured (lost power)"));
 #endif
-    digitalWrite(ERROR_LED_PIN, HIGH);
-    delay(2000);
-    digitalWrite(ERROR_LED_PIN, LOW);
+    warning(1000, 1);
   }
 
   // These features should be disabled initially to save power.
@@ -104,7 +110,7 @@ void setup() {
   rtc.disableAlarm(2);
   // Test connection with the SD. If it fails, then the error LED will blink 
   // twice per second until the device is restarted.
-  if (!SD.begin(SD_CS_PIN)) {
+  if (!sd.begin(SD_CS_PIN, SPI_FULL_SPEED)) {
 #if ECHO_TO_SERIAL
     Serial.println(F("SD setup error"));
 #endif
@@ -114,25 +120,61 @@ void setup() {
   // Initialize the MS5803 pressure sensor.
   sensor.reset();
   sensor.begin();
+
+  // The sensor will sleep until this minute value in the current time.
+  uint16_t startMinute;
+  // Open the config file if it exists to obtain the start minute, data
+  // sampling duration, and sleep duration.
+  if (logfile.open("config.txt", O_READ)) {
+    // An array to store the configuration values.
+    uint16_t configVars[3] = {0};
+    // Reading in a number from each line of the file:
+    for (uint8_t i = 0; i < 3; i++) {
+      char c = logfile.read();
+      // Build the number by reading one digit at a time until reaching a 
+      // non-numeric character.
+      while (c >= '0' && c <= '9') {
+        configVars[i] = (10 * configVars[i]) + (c - '0');
+        c = logfile.read();
+      }
+      // Read until the current line ends or the file ends.
+      while (c != '\n' && c != EOF) {
+        c = logfile.read();
+      }
+    }
+    logfile.close();
+    // Set these values based on the corresponding config values.
+    startMinute = configVars[0]; // 1st line in file.
+    dataDuration = configVars[1]; // 2nd line in file.
+    sleepDuration = configVars[2]; // 3rd line in file.
+  } else {
+    // Warn the user that default settings are being used by blinking for
+    // 2 seconds twice.
+    warning(2000, 2);
+    startMinute = START_MINUTE;
+    dataDuration = DATA_DURATION;
+    sleepDuration = SLEEP_DURATION;
+  }
   
   now = rtc.now();
 
-  // If a START_MINUTE value between 0 and 59 is set, the device will go into 
+  // If a startMinute value between 0 and 59 is set, the device will go into 
   // deep sleep until the current minute matches specified minute value.
   // Otherwise, the device will start right away.
-  if ((START_MINUTE >= 0) && (now.minute() != START_MINUTE)) {
+  if ((startMinute < 60) && (now.minute() != startMinute)) {
 #if ECHO_TO_SERIAL
-    Serial.println(F("Waiting for START_MINUTE"));
+    Serial.println(F("Waiting for startMinute"));
     Serial.flush();
 #endif
-    deepSleep(now + TimeSpan(0, 0, (START_MINUTE - now.minute() + 60) % 60, 0), DS3231_A1_Minute);
+    deepSleep(now + TimeSpan(0, 0, (startMinute - now.minute() + 60) % 60, 0), DS3231_A1_Minute);
   }
 
 #if ECHO_TO_SERIAL
   Serial.println(F("Setup complete, beginning sampling"));
   Serial.flush();
 #endif
-  
+  // Tell the user the device was initialized properly.
+  warning(100, 2);
   // Prepare to begin sampling.
   enableTimer();
 }
@@ -144,31 +186,30 @@ void setup() {
  * will either be sampling or entering deep sleep. While sampling, the device 
  * takes a specified number of samples per second, briefly sleeping between 
  * samples, and saves them to the log file. This continues for a duration 
- * specified by DATA_DURATION. While entering deep sleep, the device disables as
+ * specified by dataDuration. While entering deep sleep, the device disables as
  * many components as possible to save power and relies on an alarm pulse from 
- * the DS3231 in order to wake up after a duration specified by SLEEP_DURATION
+ * the DS3231 in order to wake up after a duration specified by sleepDuration.
  */
 void loop() {
   now = rtc.now();
 
   // Start a new CSV file each day.
   if (oldDay != now.day()) {
-    char filename[] = "YYYYMMDD.csv"; // The file name will follow this format.
+    char filename[] = "ms2-YYYYMMDD.csv"; // The file name will follow this format.
     
     logfile.close();
-    logfile = SD.open(now.toString(filename), FILE_WRITE);
-
+    
     // If there was an error creating the new log, the device will stop and 
     // blink three times per second until being restarted.
-    if (!logfile) {
+    if (!logfile.open(now.toString(filename), O_WRITE | O_CREAT | O_AT_END)) {
 #if ECHO_TO_SERIAL
       Serial.println(F("Couldn't create file."));
 #endif
       error(3);
     }
     // Print a header for the file.
-    logfile.println(F("date,time,pressure,temperature"));
-    logfile.flush();
+    logfile.write("date,time,pressure,temperature\n");
+    logfile.sync();
 #if ECHO_TO_SERIAL
     Serial.print(F("Starting new file: ")); 
     Serial.println(filename);
@@ -181,29 +222,18 @@ void loop() {
   // Otherwise, enter deep sleep.
   if (active) {
     if (sampling) {
-      char buffer[PRECISION + 6];
       double pressure = sensor.getPressure(ADC_4096);
       int temperature = sensor.getTemperature(CELSIUS, ADC_512); 
-      // Convert the pressure value to a string, as doubles are printed as
-      // ints to a logfile and we want to keep the fractional value.
-      dtostrf(pressure, 4, PRECISION, buffer);
           
-      logfile.print(now.year());
-      logfile.print(F("-"));
-      logfile.print(now.month());
-      logfile.print(F("-"));
-      logfile.print(now.day());
-      logfile.print(F(","));
-      logfile.print(now.hour());
-      logfile.print(F(":"));
-      logfile.print(now.minute());
-      logfile.print(F(":"));
-      logfile.print(now.second());
-      logfile.print(F(","));
-      logfile.print(buffer);
-      logfile.print(F(","));
-      logfile.println(temperature);
-      logfile.flush();
+      logfile.printField(now.year(), '-');
+      logfile.printField(now.month(), '-');
+      logfile.printField(now.day(), ',');
+      logfile.printField(now.hour(), ':');
+      logfile.printField(now.minute(), ':');
+      logfile.printField(now.second(), ',');
+      logfile.printField(pressure, ',', PRECISION);
+      logfile.printField(temperature, '\n');
+      logfile.sync();
       
 #if ECHO_TO_SERIAL
       Serial.print(now.year());
@@ -232,8 +262,8 @@ void loop() {
   } else {
     disableTimer();
 
-    // Enter deep sleep for the specified SLEEP_DURATION
-    deepSleep(rtc.now() + TimeSpan(0, 0, SLEEP_DURATION, 0), DS3231_A1_Minute);
+    // Enter deep sleep for the specified sleepDuration.
+    deepSleep(rtc.now() + TimeSpan(0, 0, sleepDuration, 0), DS3231_A1_Minute);
 
     // Prepare to resume sampling.
     enableTimer();
@@ -325,12 +355,13 @@ void enableTimer() {
   // This will allow the main loop to execute the sampling code.
   active = true;
   sampling = true;
-#if DATA_DURATION > 0
+
   // Set an interrupt and alarm to stop sampling after the time specified by
-  // DATA_DURATION has passed.
-  attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
-  rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, DATA_DURATION, 0), DS3231_A1_Minute);
-#endif
+  // dataDuration has passed. If sleepDuration is 0, no interrupt is set.
+  if (sleepDuration) {
+    attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
+    rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, dataDuration, 0), DS3231_A1_Minute);
+  }
 }
 
 
@@ -340,15 +371,6 @@ void enableTimer() {
 void stopSamplingISR() {
   detachInterrupt(INTERRUPT_INTPIN);
   active = false;
-}
-
-
-/*
- * Interrupt Service Routine used wake the device up from light sleep and tell
- * it to take a single sample.
- */
-ISR(TIMER2_OVF_vect) {
-  sampling = true;
 }
 
 
@@ -401,11 +423,20 @@ void lightSleep() {
 
 
 /*
+ * Interrupt Service Routine used wake the device up from light sleep and tell
+ * it to take a single sample.
+ */
+ISR(TIMER2_OVF_vect) {
+  sampling = true;
+}
+
+
+/*
  * Enter an endless loop while flashing the error LED a given number of times
  * each second.
  */
-void error(short flashes) {
-  int duration = 1000 / flashes;
+void error(uint8_t flashes) {
+  uint16_t duration = 1000 / flashes;
   while (1) {
     for (uint8_t i = 0; i < flashes; i++) {
       digitalWrite(ERROR_LED_PIN, HIGH);
@@ -414,5 +445,18 @@ void error(short flashes) {
       delay(duration);
     }
     delay(1000);
+  }
+}
+
+
+/*
+ * Flash the error LED to warn the user.
+ */
+void warning(uint16_t duration, uint8_t flashes) {
+  for (uint8_t i = 0; i < flashes; i++) {
+    digitalWrite(ERROR_LED_PIN, HIGH);
+    delay(duration);
+    digitalWrite(ERROR_LED_PIN, LOW);
+    delay(duration);
   }
 }
