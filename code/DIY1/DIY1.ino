@@ -8,11 +8,12 @@
 // =============================================================================
 
 #include <Wire.h>
-#include <SparkFun_MS5803_I2C.h>
 #include <SD.h>
-#include "RTClib.h"
 #include <avr/sleep.h>
 #include <avr/wdt.h>
+
+#include "RTClib.h" // https://github.com/adafruit/RTClib
+#include "SparkFun_MS5803_I2C.h" // https://github.com/sparkfun/SparkFun_MS5803-14BA_Breakout_Arduino_Library
 
 #define ECHO_TO_SERIAL 0
 #define SDPIN 10
@@ -68,14 +69,12 @@ void setup() {
   Serial.begin(9600);
 #endif
 
+  pinMode(LED_BUILTIN, OUTPUT);
   pinMode(SDPIN, OUTPUT);
   pinMode(INTERRUPT_PIN, INPUT_PULLUP);
 
   ADCSRA = 0;
   ACSR = _BV(ACD);
-
-  sensor.reset();
-  sensor.begin();
 
   // connect to RTC
   if (!rtc.begin()) {
@@ -89,6 +88,9 @@ void setup() {
   if (!SD.begin(SDPIN)) {
     error("Card failed, or not present");
   }
+
+  sensor.reset();
+  sensor.begin();
   
   // create a new file
   char filename[] = "YYYYMMDD.csv";
@@ -104,10 +106,11 @@ void setup() {
 
   logfile.println("date, time, pressure, temperature");
   logfile.flush();
+  
 
   sampling = true;
-  stopSampling = rtc.now() + samplingDuration;
   enableTimer();
+  stopSampling = rtc.now() + samplingDuration;
 }
 
 void loop() {  
@@ -173,8 +176,8 @@ void loop() {
 }
 
 void enableTimer() {
-  attachInterrupt(INTERRUPT_INTPIN, takeSampleISR, LOW);
   rtc.enableSecondTimer();
+  attachInterrupt(INTERRUPT_INTPIN, takeSampleISR, LOW);
 }
 
 
@@ -196,6 +199,7 @@ void longSleep(uint8_t minutes) {
   Serial.println(F("Entering deep sleep"));
   Serial.flush();
 #endif
+
   // When the alarm goes off, it will cause the SQW pin of the RTC to go low.
   rtc.enableCountdownTimer(PCF8523_FrequencyMinute, minutes);
   set_sleep_mode(SLEEP_MODE_PWR_DOWN); // Saves the most power.
@@ -238,7 +242,8 @@ void shortSleep() {
   Serial.println(F("Entering short sleep"));
   Serial.flush();
 #endif
-  set_sleep_mode(SLEEP_MODE_PWR_DOWN); // Saves the most power.
+
+  set_sleep_mode(SLEEP_MODE_IDLE);
   // Disable interrupts while preparing to sleep. Without doing this, the
   // interrupt could go off before the sleep_cpu() command and leave the device
   // stuck in a sleep state with no interrupt to wake it up.
@@ -252,6 +257,8 @@ void shortSleep() {
 
   // When the device wakes up, it will resume here after executing  
   // takeSampleISR
+
+  sleep_disable();
 
 #if ECHO_TO_SERIAL
   Serial.println(F("Exiting light sleep"));
