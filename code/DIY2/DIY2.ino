@@ -11,7 +11,7 @@
 // 0 to sample right away.
 #define START_MINUTE 60
 // Default length of time to sample for.
-#define DATA_DURATION 2
+#define SAMPLING_DURATION 2
 // Default length of time to sleep after sampling for the above length of time.
 // Set to 0 for continuous sampling.
 #define SLEEP_DURATION 1
@@ -63,9 +63,12 @@ volatile bool active = true;
 // but not sampling, then it will go into a light sleep.
 volatile bool sampling = true;
 
+// =============================================================================
+
 /*
  * Setup the ATMEGA328P and peripherals to make sure connections are correct.
- * We will also wait before baginning sampling until the specified START_MINUTE.
+ * We will also wait before baginning sampling until the specified start
+ * minute.
  */
 void setup() {
 // Code between these if statements will only be run if ECHO_TO_SERIAL is not 0.
@@ -102,12 +105,12 @@ void setup() {
 #endif
     warning(1000, 1);
   }
-
   // These features should be disabled initially to save power.
   rtc.disable32K(); // 32KHz clock
   rtc.writeSqwPinMode(DS3231_OFF); // Square wave output
   rtc.clearAlarm(1); 
   rtc.disableAlarm(2);
+
   // Test connection with the SD. If it fails, then the error LED will blink 
   // twice per second until the device is restarted.
   if (!sd.begin(SD_CS_PIN, SPI_FULL_SPEED)) {
@@ -126,6 +129,9 @@ void setup() {
   // Open the config file if it exists to obtain the start minute, data
   // sampling duration, and sleep duration.
   if (logfile.open("config.txt", O_READ)) {
+#if ECHO_TO_SERIAL
+    Serial.println(F("Reading from config file:"));
+#endif ECHO_TO_SERIAL
     // An array to store the configuration values.
     uint16_t configVars[3] = {0};
     // Reading in a number from each line of the file:
@@ -134,7 +140,7 @@ void setup() {
       // Build the number by reading one digit at a time until reaching a 
       // non-numeric character.
       while (c >= '0' && c <= '9') {
-        configVars[i] = (10 * configVars[i]) + (c - '0');
+        configVars[i] = (10 * configVars[i]) + (uint16_t)(c - '0');
         c = logfile.read();
       }
       // Read until the current line ends or the file ends.
@@ -148,13 +154,24 @@ void setup() {
     dataDuration = configVars[1]; // 2nd line in file.
     sleepDuration = configVars[2]; // 3rd line in file.
   } else {
+#if ECHO_TO_SERIAL
+    Serial.println(F("Using default config:"));
+#endif ECHO_TO_SERIAL
     // Warn the user that default settings are being used by blinking for
     // 2 seconds twice.
     warning(2000, 2);
     startMinute = START_MINUTE;
-    dataDuration = DATA_DURATION;
+    dataDuration = SAMPLING_DURATION;
     sleepDuration = SLEEP_DURATION;
   }
+#if ECHO_TO_SERIAL
+  Serial.print(F("startMinute = "));
+  Serial.println(startMinute);
+  Serial.print(F("dataDuration = "));
+  Serial.println(dataDuration);
+  Serial.print(F("sleepDuration = "));
+  Serial.println(sleepDuration);
+#endif
   
   now = rtc.now();
 
@@ -248,7 +265,7 @@ void loop() {
       Serial.print(F(":"));
       Serial.print(now.second());
       Serial.print(F(", "));
-      Serial.print(buffer);
+      Serial.print(pressure);
       Serial.print(F(", "));
       Serial.println(temperature);
       Serial.flush();
