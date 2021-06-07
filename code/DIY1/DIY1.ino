@@ -9,10 +9,10 @@
 
 #include <Wire.h>
 #include <SPI.h>
-#include <SD.h>
 #include <avr/sleep.h>
 #include <avr/wdt.h>
 
+#include "SdFat.h"
 #include "RTClib.h" // https://github.com/adafruit/RTClib
 #include "SparkFun_MS5803_I2C.h" // https://github.com/sparkfun/SparkFun_MS5803-14BA_Breakout_Arduino_Library
 
@@ -30,7 +30,7 @@
 
 // Set to 1 to have info appear on the Serial Monitor when plugged into a 
 // computer. Disable during deployment, (set to 0) in order to save battery.
-#define ECHO_TO_SERIAL 1
+#define ECHO_TO_SERIAL 0
 
 // This pin is used for detecting an alarm from the RTC and triggering an
 // interrupt to wake the device up.
@@ -45,7 +45,8 @@
 // Real Time Clock object.
 RTC_PCF8523 rtc;
 // Used for writing data to the current day's log file on the SD card.
-File logfile;
+SdFat sd;
+SdFile logfile;
 // Pressure sensor object.
 MS5803 sensor(ADDRESS_HIGH);
 
@@ -72,7 +73,6 @@ void setup() {
 #if ECHO_TO_SERIAL
   Serial.begin(9600);
 #endif
-
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(INTERRUPT_PIN, INPUT_PULLUP);
 
@@ -92,7 +92,7 @@ void setup() {
   rtc.deconfigureAllTimers();
 
   // Test connection with the SD. If it fails, the LED will light up.
-  if (!SD.begin(SD_CS_PIN)) {
+  if (!sd.begin(SD_CS_PIN, SPI_FULL_SPEED)) {
 #if ECHO_TO_SERIAL
     Serial.println(F("SD setup error"));
 #endif
@@ -104,14 +104,13 @@ void setup() {
   
   // The sensor will sleep until this minute value in the current time.
   uint16_t startMinute;
+
   // Open the config file if it exists to obtain the start minute, data
   // sampling duration, and sleep duration.
-  
-  if (SD.exists("config.txt")) {
+  if (logfile.open("config.txt", O_READ)) {
 #if ECHO_TO_SERIAL
     Serial.println(F("Reading from config file:"));
-#endif ECHO_TO_SERIAL
-    logfile = SD.open("config.txt", FILE_READ);
+#endif
     // An array to store the configuration values.
     uint16_t configVars[3] = {0};
     // Reading in a number from each line of the file:
@@ -182,22 +181,21 @@ void loop() {
 
   // Start a new CSV file each day.
   if (oldDay != now.day()) {
-    char filename[] = "YYYYMMDD.csv"; // The file name will follow this format.
+    char filename[] = "ms2-YYYYMMDD.csv"; // The file name will follow this format.
     
     logfile.close();
     
     // If there was an error creating the new log, the device will stop and 
     // blink three times per second until being restarted.
-    logfile = SD.open(now.toString(filename), FILE_WRITE);
-    if (!logfile) {
+    if (!logfile.open(now.toString(filename), O_WRITE | O_CREAT | O_AT_END)) {
 #if ECHO_TO_SERIAL
       Serial.println(F("Couldn't create file."));
 #endif
       error();
     }
     // Print a header for the file.
-    logfile.println("date,time,pressure,temperature\n");
-    logfile.flush();
+    logfile.write("date,time,pressure,temperature\n");
+    logfile.sync();
 #if ECHO_TO_SERIAL
     Serial.print(F("Starting new file: ")); 
     Serial.println(filename);
@@ -205,29 +203,22 @@ void loop() {
 #endif
     oldDay = now.day();
   }
-  digitalWrite(LED_BUILTIN, HIGH);
+
   if (now < stopSampling) {
     if (sampling) {
       double pressure = sensor.getPressure(ADC_4096);
       int temperature = sensor.getTemperature(CELSIUS, ADC_512); 
       
       // Write to SD card:
-      logfile.print(now.year()); 
-      logfile.print("/");
-      logfile.print(now.month());
-      logfile.print("/");
-      logfile.print(now.day());
-      logfile.print(", ");
-      logfile.print(now.hour());
-      logfile.print(":");
-      logfile.print(now.minute());
-      logfile.print(":");
-      logfile.print(now.second());
-      logfile.print(",");
-      logfile.print(pressure);
-      logfile.print(",");
-      logfile.println(temperature);
-      logfile.flush();
+      logfile.printField(now.year(), '-');
+      logfile.printField(now.month(), '-');
+      logfile.printField(now.day(), ',');
+      logfile.printField(now.hour(), ':');
+      logfile.printField(now.minute(), ':');
+      logfile.printField(now.second(), ',');
+      logfile.printField(pressure, ',', PRECISION);
+      logfile.printField(temperature, '\n');
+      logfile.sync();
 
 #if ECHO_TO_SERIAL
       Serial.print(now.year());
@@ -261,7 +252,6 @@ void loop() {
     stopSampling = rtc.now() + samplingDuration;
     enableTimer();
   }
-  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void enableTimer() {
