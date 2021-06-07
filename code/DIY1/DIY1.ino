@@ -30,7 +30,7 @@
 
 // Set to 1 to have info appear on the Serial Monitor when plugged into a 
 // computer. Disable during deployment, (set to 0) in order to save battery.
-#define ECHO_TO_SERIAL 0
+#define ECHO_TO_SERIAL 1
 
 // This pin is used for detecting an alarm from the RTC and triggering an
 // interrupt to wake the device up.
@@ -107,11 +107,11 @@ void setup() {
   // Open the config file if it exists to obtain the start minute, data
   // sampling duration, and sleep duration.
   
-  if (SD.exists("config4.txt")) {
+  if (SD.exists("config.txt")) {
 #if ECHO_TO_SERIAL
     Serial.println(F("Reading from config file:"));
 #endif ECHO_TO_SERIAL
-    logfile = SD.open("confign.txt", FILE_READ);
+    logfile = SD.open("config.txt", FILE_READ);
     // An array to store the configuration values.
     uint16_t configVars[3] = {0};
     // Reading in a number from each line of the file:
