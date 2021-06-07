@@ -8,6 +8,7 @@
 // =============================================================================
 
 #include <Wire.h>
+#include <SPI.h>
 #include <SD.h>
 #include <avr/sleep.h>
 #include <avr/wdt.h>
@@ -15,54 +16,57 @@
 #include "RTClib.h" // https://github.com/adafruit/RTClib
 #include "SparkFun_MS5803_I2C.h" // https://github.com/sparkfun/SparkFun_MS5803-14BA_Breakout_Arduino_Library
 
-#define ECHO_TO_SERIAL 0
-#define SDPIN 10
+// The device will wait until this minute value to begin. Set a value less than
+// 0 to sample right away.
+#define START_MINUTE 60
 
-// Length of time that the sensor should be active vs. inactive per cycle (seconds). 
-// I.E. 1020 seconds = 17 minutes active, 180 seconds = 3 minutes inactive is 
-// one full cycle.
+// Default length of time to sample for.
 #define SAMPLING_DURATION 1
+// Default length of time to sleep after sampling for the above length of time.
+// Set to 0 for continuous sampling.
 #define SLEEP_DURATION 1
+// Number of decimal places to keep for the pressure readings.
+#define PRECISION 2
+
+// Set to 1 to have info appear on the Serial Monitor when plugged into a 
+// computer. Disable during deployment, (set to 0) in order to save battery.
+#define ECHO_TO_SERIAL 0
 
 // This pin is used for detecting an alarm from the RTC and triggering an
 // interrupt to wake the device up.
 #define INTERRUPT_PIN 2 
 // Equivalent to digitalPinToInterrupt(2). Used in attachInterrupt() calls.
 #define INTERRUPT_INTPIN 0
+// Chip Select pin for the SD card reader.
+#define SD_CS_PIN 10
 
-// Begin class with selected address
-// available addresses (selected by jumper on board) 
-// default is ADDRESS_HIGH
+// =============================================================================
 
-//  ADDRESS_HIGH = 0x76
-//  ADDRESS_LOW  = 0x77
-
+// Real Time Clock object.
+RTC_PCF8523 rtc;
+// Used for writing data to the current day's log file on the SD card.
+File logfile;
+// Pressure sensor object.
 MS5803 sensor(ADDRESS_HIGH);
-
-RTC_PCF8523 rtc; // define the Real Time Clock object
 
 DateTime now;
 DateTime stopSampling;
-const TimeSpan samplingDuration = TimeSpan(0, 0, SAMPLING_DURATION, 0);
+TimeSpan samplingDuration;
 
+// Track the current day value to determine when a new day begins and when a new
+// CSV file must be started.
+uint8_t oldDay = 0;
+
+// These values will be obtained from the config.txt file on the SD card if it
+// exists. Otherwise, they will be set to the corresponding default values 
+// above.
+uint16_t sleepDuration;
+
+// When true, the device will be able to take a sample during the main loop of
+// the program.
 volatile bool sampling;
 
-// the logging file
-File logfile;
-
-// This void error setup is to define the error message we'll serial print and/or relay with LED lights if things aren't right
-void error(const char str[])
-{
-#if ECHO_TO_SERIAL
-  Serial.print("error: ");
-  Serial.println(str);
-#endif
-
-  // red LED indicates error
-  digitalWrite(LED_BUILTIN, HIGH);
-
-  while(1);
-}
+// =============================================================================
 
 void setup() {  
 #if ECHO_TO_SERIAL
@@ -70,43 +74,103 @@ void setup() {
 #endif
 
   pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(SDPIN, OUTPUT);
   pinMode(INTERRUPT_PIN, INPUT_PULLUP);
 
+  // Disable the Analog to Digital Converter to save power, as we don't use it
+  // here (the MS5803 uses its own).
   ADCSRA = 0;
-  ACSR = _BV(ACD);
+  ACSR = _BV(ACD); // Analog comparator.
+  wdt_disable(); // Also disable the watchdog timer.
 
-  // connect to RTC
+  // Test connection with RTC. If it fails, the LED will light up.
   if (!rtc.begin()) {
 #if ECHO_TO_SERIAL
     Serial.println("RTC failed");
-#endif  //ECHO_TO_SERIAL
+#endif
+    error();
   }
   rtc.deconfigureAllTimers();
 
-  // see if the card is present and can be initialized:
-  if (!SD.begin(SDPIN)) {
-    error("Card failed, or not present");
+  // Test connection with the SD. If it fails, the LED will light up.
+  if (!SD.begin(SD_CS_PIN)) {
+#if ECHO_TO_SERIAL
+    Serial.println(F("SD setup error"));
+#endif
+    error();
   }
 
   sensor.reset();
   sensor.begin();
   
-  // create a new file
-  char filename[] = "YYYYMMDD.csv";
-  logfile = SD.open(rtc.now().toString(filename), FILE_WRITE);
+  // The sensor will sleep until this minute value in the current time.
+  uint16_t startMinute;
+  // Open the config file if it exists to obtain the start minute, data
+  // sampling duration, and sleep duration.
   
-  if (!logfile) {
-    error("couldnt create file");
+  if (SD.exists("config4.txt")) {
+#if ECHO_TO_SERIAL
+    Serial.println(F("Reading from config file:"));
+#endif ECHO_TO_SERIAL
+    logfile = SD.open("confign.txt", FILE_READ);
+    // An array to store the configuration values.
+    uint16_t configVars[3] = {0};
+    // Reading in a number from each line of the file:
+    for (uint8_t i = 0; i < 3; i++) {
+      char c = logfile.read();
+      // Build the number by reading one digit at a time until reaching a 
+      // non-numeric character.
+      while (c >= '0' && c <= '9') {
+        configVars[i] = (10 * configVars[i]) + (uint16_t)(c - '0');
+        c = logfile.read();
+      }
+      // Read until the current line ends or the file ends.
+      while (c != '\n' && c != EOF) {
+        c = logfile.read();
+      }
+    }
+    logfile.close();
+    // Set these values based on the corresponding config values.
+    startMinute = configVars[0]; // 1st line in file.
+    samplingDuration = TimeSpan(configVars[1] * 60); // 2nd line in file.
+    sleepDuration = configVars[2]; // 3rd line in file.
+  } else {
+#if ECHO_TO_SERIAL
+    Serial.println(F("Using default config:"));
+#endif ECHO_TO_SERIAL
+    // Warn the user that default settings are being used by blinking for
+    // 2 seconds twice.
+    warning(2000, 2);
+    startMinute = START_MINUTE;
+    samplingDuration = TimeSpan(SAMPLING_DURATION * 60);
+    sleepDuration = SLEEP_DURATION;
   }
 #if ECHO_TO_SERIAL
-  Serial.print("Logging to: ");
-  Serial.println(filename);
+  Serial.print(F("startMinute = "));
+  Serial.println(startMinute);
+  Serial.print(F("samplingDuration = "));
+  Serial.println(samplingDuration.totalseconds() / 60);
+  Serial.print(F("sleepDuration = "));
+  Serial.println(sleepDuration);
+  Serial.flush();
 #endif
 
-  logfile.println("date, time, pressure, temperature");
-  logfile.flush();
-  
+  now = rtc.now();
+
+  // If a startMinute value between 0 and 59 is set, the device will go into 
+  // deep sleep until the current minute matches specified minute value.
+  // Otherwise, the device will start right away.
+  if ((startMinute < 60) && (now.minute() != startMinute)) {
+#if ECHO_TO_SERIAL
+    Serial.println(F("Waiting for startMinute"));
+    Serial.flush();
+#endif
+    longSleep((startMinute - now.minute() + 60) % 60);
+  }
+
+#if ECHO_TO_SERIAL
+  Serial.println(F("Setup complete, beginning sampling"));
+  Serial.flush();
+#endif
 
   sampling = true;
   enableTimer();
@@ -116,31 +180,36 @@ void setup() {
 void loop() {  
   now = rtc.now();
 
+  // Start a new CSV file each day.
+  if (oldDay != now.day()) {
+    char filename[] = "YYYYMMDD.csv"; // The file name will follow this format.
+    
+    logfile.close();
+    
+    // If there was an error creating the new log, the device will stop and 
+    // blink three times per second until being restarted.
+    logfile = SD.open(now.toString(filename), FILE_WRITE);
+    if (!logfile) {
+#if ECHO_TO_SERIAL
+      Serial.println(F("Couldn't create file."));
+#endif
+      error();
+    }
+    // Print a header for the file.
+    logfile.println("date,time,pressure,temperature\n");
+    logfile.flush();
+#if ECHO_TO_SERIAL
+    Serial.print(F("Starting new file: ")); 
+    Serial.println(filename);
+    Serial.flush();
+#endif
+    oldDay = now.day();
+  }
+  digitalWrite(LED_BUILTIN, HIGH);
   if (now < stopSampling) {
     if (sampling) {
       double pressure = sensor.getPressure(ADC_4096);
       int temperature = sensor.getTemperature(CELSIUS, ADC_512); 
-    
-      // print the results to the Serial Monitor:
-#if ECHO_TO_SERIAL
-      Serial.print("pressure = ");
-      Serial.print(pressure);
-      Serial.print("temp = ");
-      Serial.print(temperature);
-      Serial.print("\t date = ");
-      Serial.print(now.year());
-      Serial.print("/");
-      Serial.print(now.month());
-      Serial.print("/");
-      Serial.print(now.day());
-      Serial.print("\t time = ");
-      Serial.print(now.hour());
-      Serial.print(":");
-      Serial.print(now.minute());
-      Serial.print(":");
-      Serial.println(now.second());
-      Serial.flush();
-#endif //ECHO_TO_SERIAL
       
       // Write to SD card:
       logfile.print(now.year()); 
@@ -160,6 +229,25 @@ void loop() {
       logfile.println(temperature);
       logfile.flush();
 
+#if ECHO_TO_SERIAL
+      Serial.print(now.year());
+      Serial.print(F("-"));
+      Serial.print(now.month());
+      Serial.print(F("-"));
+      Serial.print(now.day());
+      Serial.print(F(" @ "));
+      Serial.print(now.hour());
+      Serial.print(F(":"));
+      Serial.print(now.minute());
+      Serial.print(F(":"));
+      Serial.print(now.second());
+      Serial.print(F(", "));
+      Serial.print(pressure);
+      Serial.print(F(", "));
+      Serial.println(temperature);
+      Serial.flush();
+#endif //ECHO_TO_SERIAL
+
       sampling = false;
     }
 
@@ -173,11 +261,12 @@ void loop() {
     stopSampling = rtc.now() + samplingDuration;
     enableTimer();
   }
+  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void enableTimer() {
   rtc.enableSecondTimer();
-  attachInterrupt(INTERRUPT_INTPIN, takeSampleISR, LOW);
+  attachInterrupt(INTERRUPT_INTPIN, takeSampleISR, FALLING);
 }
 
 
@@ -243,7 +332,7 @@ void shortSleep() {
   Serial.flush();
 #endif
 
-  set_sleep_mode(SLEEP_MODE_IDLE);
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   // Disable interrupts while preparing to sleep. Without doing this, the
   // interrupt could go off before the sleep_cpu() command and leave the device
   // stuck in a sleep state with no interrupt to wake it up.
@@ -264,4 +353,24 @@ void shortSleep() {
   Serial.println(F("Exiting light sleep"));
   Serial.flush();
 #endif
+}
+
+
+// This void error setup is to define the error message we'll serial print and/or relay with LED lights if things aren't right
+void error() {
+  // red LED indicates error
+  digitalWrite(LED_BUILTIN, HIGH);
+  while(1);
+}
+
+/*
+ * Flash the error LED to warn the user.
+ */
+void warning(uint16_t duration, uint8_t flashes) {
+  for (uint8_t i = 0; i < flashes; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(duration);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(duration);
+  }
 }
