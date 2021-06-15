@@ -103,7 +103,7 @@ void setup() {
 #if ECHO_TO_SERIAL
     Serial.println(F("RTC time not configured (lost power)"));
 #endif
-    warning(1000, 1);
+    warning(500, 1);
   }
   // These features should be disabled initially to save power.
   rtc.disable32K(); // 32KHz clock
@@ -159,7 +159,7 @@ void setup() {
 #endif ECHO_TO_SERIAL
     // Warn the user that default settings are being used by blinking for
     // 2 seconds twice.
-    warning(2000, 2);
+    warning(500, 2);
     startMinute = START_MINUTE;
     dataDuration = SAMPLING_DURATION;
     sleepDuration = SLEEP_DURATION;
@@ -191,7 +191,7 @@ void setup() {
   Serial.flush();
 #endif
   // Tell the user the device was initialized properly.
-  warning(100, 2);
+  warning(3000, 1);
   // Prepare to begin sampling.
   enableTimer();
 }
@@ -476,4 +476,5 @@ void warning(uint16_t duration, uint8_t flashes) {
     digitalWrite(ERROR_LED_PIN, LOW);
     delay(duration);
   }
+  delay(500);
 }
