@@ -181,7 +181,7 @@ void loop() {
 
   // Start a new CSV file each day.
   if (oldDay != now.day()) {
-    char filename[] = "ms2-YYYYMMDD.csv"; // The file name will follow this format.
+    char filename[] = "ms1-YYYYMMDD-hhmm.csv"; // The file name will follow this format.
     
     logfile.close();
     
