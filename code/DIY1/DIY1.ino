@@ -16,15 +16,21 @@
 #include "RTClib.h" // https://github.com/adafruit/RTClib
 #include "SparkFun_MS5803_I2C.h" // https://github.com/sparkfun/SparkFun_MS5803-14BA_Breakout_Arduino_Library
 
-// The device will wait until this minute value to begin. Set a value less than
-// 0 to sample right away.
-#define START_MINUTE 60
+//** The following four config values will be used when no config file is found.
+//** If a config file is found, these values will be ignored.
+// The device will wait until this minute value (between 0 and 59) to begin. 
+// Setting a value greater than 59 will cause the device to start immediately.
+#define DEFAULT_START_MINUTE 60
+// Length of time to sample for.
+#define DEFAULT_SAMPLING_DURATION 60
+// Length of time to sleep after sampling for the above duration. Set to 0 for 
+// continuous sampling.
+#define DEFAULT_SLEEP_DURATION 0
+// Specify an info string to be included in each csv file.
+#define DEFAULT_INFO_STRING "DIY1 Default Info String"
 
-// Default length of time to sample for.
-#define SAMPLING_DURATION 1
-// Default length of time to sleep after sampling for the above length of time.
-// Set to 0 for continuous sampling.
-#define SLEEP_DURATION 1
+// Default number of samples to take per second (NOT IMPLEMENTED)
+//#define SAMPLES_PER_SECOND 1
 // Number of decimal places to keep for the pressure readings.
 #define PRECISION 2
 
@@ -39,6 +45,8 @@
 #define INTERRUPT_INTPIN 0
 // Chip Select pin for the SD card reader.
 #define SD_CS_PIN 10
+// BLINK DESCRIPTION
+#define ERROR_LED_PIN LED_BUILTIN
 
 // =============================================================================
 
@@ -139,9 +147,9 @@ void setup() {
     // Warn the user that default settings are being used by blinking for
     // 2 seconds twice.
     warning(2000, 2);
-    startMinute = START_MINUTE;
-    samplingDuration = TimeSpan(SAMPLING_DURATION * 60);
-    sleepDuration = SLEEP_DURATION;
+    startMinute = DEFAULT_START_MINUTE;
+    samplingDuration = TimeSpan(DEFAULT_SAMPLING_DURATION * 60);
+    sleepDuration = DEFAULT_SLEEP_DURATION;
   }
 #if ECHO_TO_SERIAL
   Serial.print(F("startMinute = "));
@@ -246,7 +254,7 @@ void loop() {
   } else {
     disableTimer();
 
-    longSleep(SLEEP_DURATION);
+    longSleep(DEFAULT_SLEEP_DURATION);
 
     sampling = true;
     stopSampling = rtc.now() + samplingDuration;
