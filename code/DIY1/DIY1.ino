@@ -203,7 +203,7 @@ void setup() {
   Serial.print(F("startMinute = "));
   Serial.println(startMinute);
   Serial.print(F("samplingDuration = "));
-  Serial.println(samplingDuration.minutes());
+  Serial.println(samplingDuration.totalseconds() / 60);
   Serial.print(F("sleepDuration = "));
   Serial.println(sleepDuration);
   Serial.print(F("infoString = "));
@@ -252,7 +252,7 @@ void loop() {
     }
     // Print a header for the file.
     logFile.write("samplingDuration,sleepDuration,infoString\n");
-    logFile.printField(samplingDuration.minutes(), ',');
+    logFile.printField(samplingDuration.totalseconds() / 60, ',');
     logFile.printField(sleepDuration, ',');
     logFile.write(infoString);
     logFile.write("\ndate,time,pressure,temperature\n");
