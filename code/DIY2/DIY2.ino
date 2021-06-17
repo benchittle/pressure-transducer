@@ -18,9 +18,12 @@
 // Length of time to sleep after sampling for the above duration. Set to 0 for 
 // continuous sampling.
 #define DEFAULT_SLEEP_DURATION 0
-// Specify an info string to be included in each csv file.
+// Specify an info string to be included in each csv file. 63 characters max.
 #define DEFAULT_INFO_STRING "DIY2 Default Info String"
+#define INFO_STRING_SIZE 64
 
+#define OUTPUT_FILE_NAME "ms2-YYYYMMDD-hhmm.csv"
+#define CONFIG_FILE_NAME "config.txt"
 // Default number of samples to take per second (NOT IMPLEMENTED)
 //#define SAMPLES_PER_SECOND 1
 // Number of decimal places to keep for the pressure readings.
@@ -28,7 +31,7 @@
 
 // Set to 1 to have info appear on the Serial Monitor when plugged into a 
 // computer. Disable during deployment, (set to 0) in order to save battery.
-#define ECHO_TO_SERIAL 0
+#define ECHO_TO_SERIAL 1
 
 // This pin is used for detecting an alarm from the RTC and triggering an
 // interrupt to wake the device up.
@@ -46,7 +49,7 @@
 RTC_DS3231 rtc;
 // Used for writing data to the current day's log file on the SD card.
 SdFat sd;
-SdFile logfile;
+SdFile logFile;
 // Pressure sensor object.
 MS5803 sensor(ADDRESS_HIGH);
 
@@ -56,10 +59,10 @@ DateTime now;
 uint8_t oldDay = 0;
 
 // These values will be obtained from the config.txt file on the SD card if it
-// exists. Otherwise, they will be set to the corresponding default values 
-// above.
-uint16_t dataDuration;
-uint16_t sleepDuration;
+// exists. Otherwise, the corresponding default values will be used.
+uint16_t samplingDuration = DEFAULT_SAMPLING_DURATION;
+uint16_t sleepDuration = DEFAULT_SLEEP_DURATION;
+char infoString[INFO_STRING_SIZE] = DEFAULT_INFO_STRING;
 
 // When the device is active, it will sample at the specified frequency and go
 // into a light sleep between samples. When the device is inactive, it will go
@@ -84,7 +87,6 @@ void setup() {
 
   pinMode(INTERRUPT_PIN, INPUT_PULLUP);
   pinMode(ERROR_LED_PIN, OUTPUT);
-  digitalWrite(ERROR_LED_PIN, LOW);
 
   // Disable the Analog to Digital Converter to save power, as we don't use it
   // here (the MS5803 uses its own).
@@ -100,7 +102,6 @@ void setup() {
 #endif
     error(1);
   }
-
   // If the RTC lost power and therefore lost track of time, it will light up 
   // the LED for 1 second. While it is not necessary that the RTC has the right
   // time, if multiple sensors are being deployed and are meant to start at the
@@ -130,53 +131,86 @@ void setup() {
   sensor.reset();
   sensor.begin();
 
-  // The sensor will sleep until this minute value in the current time.
-  uint16_t startMinute;
+  // Used for reading data from the config file, if present.
+  SdFile configFile;
+  // The sensor will sleep until this minute value.
+  uint16_t startMinute = DEFAULT_START_MINUTE;
   // Open the config file if it exists to obtain the start minute, data
-  // sampling duration, and sleep duration.
-  if (logfile.open("config.txt", O_READ)) {
+  // sampling duration, sleep duration, and info string.
+  if (configFile.open(CONFIG_FILE_NAME, O_READ)) {
 #if ECHO_TO_SERIAL
     Serial.println(F("Reading from config file:"));
 #endif
-    // An array to store the configuration values.
+    // Determines whether a number was read for each config variable. If one is
+    // missing, we assume the config file is wrong and use all default values.
+    bool foundNumberFlag;
+    // An array to store the numeric configuration values.
     uint16_t configVars[3] = {0};
-    // Reading in a number from each line of the file:
+    // Reading in a number from the first 3 lines of the file:
+    char c;
     for (uint8_t i = 0; i < 3; i++) {
-      char c = logfile.read();
+      foundNumberFlag = false;
+      // Reading a single character.
+      c = configFile.read();
       // Build the number by reading one digit at a time until reaching a 
       // non-numeric character.
       while (c >= '0' && c <= '9') {
+        foundNumberFlag = true;
         configVars[i] = (10 * configVars[i]) + (uint16_t)(c - '0');
-        c = logfile.read();
+        c = configFile.read();
       }
+
+      if (!foundNumberFlag) {
+#if ECHO_TO_SERIAL
+        Serial.println(F("Failed to read all config variables. Using default values:"));
+#endif
+        warning(500, 2);
+        break;
+      }
+
       // Read until the current line ends or the file ends.
       while (c != '\n' && c != EOF) {
-        c = logfile.read();
+        c = configFile.read();
       }
     }
-    logfile.close();
+    // Look for the info string if we still haven't reach the end of the file
+    // and all other config values have been found. Otherwise, use the default.
+    if (c != EOF && foundNumberFlag) {
+      // Read up to 63 characters on the current line to form the info string.
+      uint8_t i = 0;
+      do {
+        c = configFile.read();
+        infoString[i++] = c;
+      } while ((c != '\n' && c != EOF) && (i < INFO_STRING_SIZE - 1));
+      infoString[i] = '\0';
+    } else {
+#if ECHO_TO_SERIAL
+      Serial.println(F("No info string found. Using default info string:"));
+#endif
+    }
+
+    configFile.close();
+
     // Set these values based on the corresponding config values.
     startMinute = configVars[0]; // 1st line in file.
-    dataDuration = configVars[1]; // 2nd line in file.
+    samplingDuration = configVars[1]; // 2nd line in file.
     sleepDuration = configVars[2]; // 3rd line in file.
   } else {
 #if ECHO_TO_SERIAL
-    Serial.println(F("Using default config:"));
+    Serial.println(F("No config file found. Using default values:"));
 #endif
-    // Warn the user that default settings are being used by blinking for
-    // 2 seconds twice.
     warning(500, 2);
-    startMinute = DEFAULT_START_MINUTE;
-    dataDuration = DEFAULT_SAMPLING_DURATION;
-    sleepDuration = DEFAULT_SLEEP_DURATION;
   }
+
 #if ECHO_TO_SERIAL
   Serial.print(F("startMinute = "));
   Serial.println(startMinute);
-  Serial.print(F("dataDuration = "));
-  Serial.println(dataDuration);
+  Serial.print(F("samplingDuration = "));
+  Serial.println(samplingDuration);
   Serial.print(F("sleepDuration = "));
   Serial.println(sleepDuration);
+  Serial.print(F("infoString = "));
+  Serial.println(infoString);
 #endif
   
   now = rtc.now();
@@ -209,7 +243,7 @@ void setup() {
  * will either be sampling or entering deep sleep. While sampling, the device 
  * takes a specified number of samples per second, briefly sleeping between 
  * samples, and saves them to the log file. This continues for a duration 
- * specified by dataDuration. While entering deep sleep, the device disables as
+ * specified by samplingDuration. While entering deep sleep, the device disables as
  * many components as possible to save power and relies on an alarm pulse from 
  * the DS3231 in order to wake up after a duration specified by sleepDuration.
  */
@@ -218,21 +252,25 @@ void loop() {
 
   // Start a new CSV file each day.
   if (oldDay != now.day()) {
-    char filename[] = "ms2-YYYYMMDD-hhmm.csv"; // The file name will follow this format.
+    char filename[] = OUTPUT_FILE_NAME; // The file name will follow this format.
     
-    logfile.close();
+    logFile.close();
     
     // If there was an error creating the new log, the device will stop and 
     // blink three times per second until being restarted.
-    if (!logfile.open(now.toString(filename), O_WRITE | O_CREAT | O_AT_END)) {
+    if (!logFile.open(now.toString(filename), O_WRITE | O_CREAT | O_AT_END)) {
 #if ECHO_TO_SERIAL
       Serial.println(F("Couldn't create file."));
 #endif
       error(3);
     }
     // Print a header for the file.
-    logfile.write("date,time,pressure,temperature\n");
-    logfile.sync();
+    logFile.write("samplingDuration,sleepDuration,infoString\n");
+    logFile.printField(samplingDuration, ',');
+    logFile.printField(sleepDuration, ',');
+    logFile.write(infoString);
+    logFile.write("\ndate,time,pressure,temperature\n");
+    logFile.sync();
 #if ECHO_TO_SERIAL
     Serial.print(F("Starting new file: ")); 
     Serial.println(filename);
@@ -248,15 +286,15 @@ void loop() {
       double pressure = sensor.getPressure(ADC_4096);
       int temperature = sensor.getTemperature(CELSIUS, ADC_512); 
           
-      logfile.printField(now.year(), '-');
-      logfile.printField(now.month(), '-');
-      logfile.printField(now.day(), ',');
-      logfile.printField(now.hour(), ':');
-      logfile.printField(now.minute(), ':');
-      logfile.printField(now.second(), ',');
-      logfile.printField(pressure, ',', PRECISION);
-      logfile.printField(temperature, '\n');
-      logfile.sync();
+      logFile.printField(now.year(), '-');
+      logFile.printField(now.month(), '-');
+      logFile.printField(now.day(), ',');
+      logFile.printField(now.hour(), ':');
+      logFile.printField(now.minute(), ':');
+      logFile.printField(now.second(), ',');
+      logFile.printField(pressure, ',', PRECISION);
+      logFile.printField(temperature, '\n');
+      logFile.sync();
       
 #if ECHO_TO_SERIAL
       Serial.print(now.year());
@@ -380,10 +418,10 @@ void enableTimer() {
   sampling = true;
 
   // Set an interrupt and alarm to stop sampling after the time specified by
-  // dataDuration has passed. If sleepDuration is 0, no interrupt is set.
+  // samplingDuration has passed. If sleepDuration is 0, no interrupt is set.
   if (sleepDuration) {
     attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
-    rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, dataDuration, 0), DS3231_A1_Minute);
+    rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, samplingDuration, 0), DS3231_A1_Minute);
   }
 }
 
