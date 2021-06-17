@@ -73,7 +73,6 @@ uint8_t oldDay = 0;
 // exists. Otherwise, they will be set to the corresponding default values 
 // above.
 uint16_t sleepDuration = DEFAULT_SLEEP_DURATION;
-uint16_t samplingDurationInt = DEFAULT_SAMPLING_DURATION;
 TimeSpan samplingDuration = TimeSpan(DEFAULT_SAMPLING_DURATION * 60);
 char infoString[INFO_STRING_SIZE] = DEFAULT_INFO_STRING;
 
@@ -191,8 +190,7 @@ void setup() {
 
     // Set these values based on the corresponding config values.
     startMinute = configVars[0]; // 1st line in file.
-    samplingDurationInt = configVars[1];
-    samplingDuration = TimeSpan(configVars[1] >= 60 ? 0 : configVars[1]); // 2nd line in file.
+    samplingDuration = TimeSpan(configVars[1] * 60); // 2nd line in file.
     sleepDuration = configVars[2]; // 3rd line in file.
   } else {
 #if ECHO_TO_SERIAL
@@ -205,7 +203,7 @@ void setup() {
   Serial.print(F("startMinute = "));
   Serial.println(startMinute);
   Serial.print(F("samplingDuration = "));
-  Serial.println(configVars[1]);
+  Serial.println(samplingDuration.minutes());
   Serial.print(F("sleepDuration = "));
   Serial.println(sleepDuration);
   Serial.print(F("infoString = "));
