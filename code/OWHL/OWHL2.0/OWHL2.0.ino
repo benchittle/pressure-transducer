@@ -31,7 +31,7 @@
 
 // Set to 1 to have info appear on the Serial Monitor when plugged into a 
 // computer. Disable during deployment, (set to 0) in order to save battery.
-#define ECHO_TO_SERIAL 1
+#define ECHO_TO_SERIAL 0
 
 // Chip Select pin for the SD card reader.
 #define SD_CS_PIN 10
@@ -232,7 +232,7 @@ void setup() {
   }
 
 #if ECHO_TO_SERIAL
-  Serial.println(F("Setup complete, beginning sampling"));
+  Serial.println(F("\nSetup complete, beginning sampling"));
   Serial.flush();
 #endif
   // Tell the user the device was initialized properly.
