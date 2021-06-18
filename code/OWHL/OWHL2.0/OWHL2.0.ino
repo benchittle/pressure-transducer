@@ -40,6 +40,8 @@
 #define LED_PIN 6
 #define REED_PIN 3
 #define BUZZER_PIN 7
+#define BUZZER_PORT PORTD
+#define BUZZER_PORT_PIN PORTD7
 #define HEARTBEAT_INTPIN 1
 
 
@@ -63,7 +65,7 @@ char filename[] = OUTPUT_FILE_NAME;
 
 // These values will be obtained from the config.txt file on the SD card if it
 // exists. Otherwise, the corresponding default values will be used.
-TimeSpan samplingDURATION = TimeSpan(DEFAULT_SAMPLING_DURATION * 60);
+TimeSpan samplingDuration = TimeSpan(DEFAULT_SAMPLING_DURATION * 60);
 TimeSpan sleepDURATION = TimeSpan(DEFAULT_SLEEP_DURATION * 60);
 char infoString[INFO_STRING_SIZE] = DEFAULT_INFO_STRING;
 
@@ -74,13 +76,7 @@ volatile bool sampling = true;
 bool noSleep = false;
 bool heartBeatFlag = false;
 uint8_t heartBeatCount = 0;
-uint16_t frequency = 2000;
-uint16_t duration = 15;
-
-
-volatile long timer1_toggle_count;
-volatile uint8_t *timer1_pin_port;
-volatile uint8_t timer1_pin_mask;
+volatile uint16_t timer1ToggleCount;
 
 void setup() {
   // Code between these if statements will only be run if ECHO_TO_SERIAL is not 0.
@@ -198,7 +194,7 @@ void setup() {
 
     // Set these values based on the corresponding config values.
     startMinute = configVars[0]; // 1st line in file.
-    samplingDURATION = TimeSpan(configVars[1] * 60); // 2nd line in file.
+    samplingDuration = TimeSpan(configVars[1] * 60); // 2nd line in file.
     sleepDURATION = TimeSpan(configVars[2] * 60); // 3rd line in file.
   } else {
 #if ECHO_TO_SERIAL
@@ -210,9 +206,9 @@ void setup() {
 #if ECHO_TO_SERIAL
   Serial.print(F("startMinute = "));
   Serial.println(startMinute);
-  Serial.print(F("samplingDURATION = "));
-  Serial.println(samplingDURATION.totalseconds() / 60);
-  Serial.print(F("sleepDURATION = "));
+  Serial.print(F("samplingDuration = "));
+  Serial.println(samplingDuration.totalseconds() / 60);
+  Serial.print(F("sleepDuration = "));
   Serial.println(sleepDURATION.totalseconds() / 60);
   Serial.print(F("infoString = "));
   Serial.println(infoString);
@@ -245,7 +241,7 @@ void setup() {
   // Prepare to begin sampling.
   heartBeatFlag = true;
   sampling = true;
-  stopSampling = rtc.now() + samplingDURATION;
+  stopSampling = rtc.now() + samplingDuration;
   enableTimer();
 }
 
@@ -270,8 +266,8 @@ void loop() {
       error(3);
     }
     // Print a header for the file.
-    logFile.write("samplingDURATION,sleepDURATION,infoString\n");
-    logFile.printField(samplingDURATION.totalseconds() / 60, ',');
+    logFile.write("samplingDuration,sleepDuration,infoString\n");
+    logFile.printField(samplingDuration.totalseconds() / 60, ',');
     logFile.printField(sleepDURATION.totalseconds() / 60, ',');
     logFile.write(infoString);
     logFile.write("\ndate,time,pressure,temperature\n");
@@ -336,12 +332,11 @@ void loop() {
     logFile.open(filename, O_WRITE | O_AT_END);
     // Prepare to resume sampling.
     sampling = true;
-    stopSampling = rtc.now() + samplingDURATION;
+    stopSampling = rtc.now() + samplingDuration;
     enableTimer();
   }
   if (heartBeatFlag) {
-    heartBeat();
-    delay(duration);
+    heartBeat(2000, 15);
   }
 
   
@@ -352,8 +347,7 @@ void deepSleep(const DateTime wakeTime) {
   DateTime nearWakeTime = DateTime(wakeTime.secondstime() - 9);
   while (rtc.now() < nearWakeTime) {
     if (heartBeatFlag) {
-      heartBeat();
-      delay(duration);
+      heartBeat(2000, 15);
     }
     /* It seems to be necessary to zero out the Asynchronous clock status 
     * register (ASSR) before enabling the watchdog timer interrupts in this
@@ -517,78 +511,42 @@ void heartBeatInterrupt() {
 // to AVR pin PD7 and flashes the LED to notify the user that datalogging
 // is still happening, or will happen again on schedule. 
 
-void heartBeat(void){
-				if (heartBeatCount < 10){
-					digitalWrite(LED_PIN, HIGH); // also flash LED
-					delay(5);
-					digitalWrite(LED_PIN, LOW); // turn off LED
-					beepbuzzer(); // Play tone on Arduino pin 7 (PD7)
-					heartBeatCount++; // increment counter
-				} else {
-					// If the heartbeat has executed 10 times, shut if off,
-					// reactivate the heartbeat interrupt, and reset the counter
-					heartBeatFlag = 0;
-					// Register the heartBeatInterrupt service routine on INT1, 
-					// triggered whenever INT1 is pulled low.
-					attachInterrupt(1, heartBeatInterrupt, LOW);
-					heartBeatCount = 0;
-				}
+void heartBeat(uint16_t frequency, uint16_t duration){
+  if (heartBeatCount < 10){
+    beepBuzzer(frequency, duration); // Play tone on Arduino pin 7 (PD7)
+    heartBeatCount++; // increment counter
+  } else {
+    // If the heartbeat has executed 10 times, shut if off,
+    // reactivate the heartbeat interrupt, and reset the counter
+    heartBeatFlag = 0;
+    // Register the heartBeatInterrupt service routine on INT1, 
+    // triggered whenever INT1 is pulled low.
+    attachInterrupt(1, heartBeatInterrupt, LOW);
+    heartBeatCount = 0;
+  }
 }
 
 //-------------------------------------------------------------------------
-// Function beepbuzzer()
+// Function beepBuzzer()
 // This function uses TIMER1 to toggle the BUZZER pin to drive a piezo 
 // buzzer. The frequency and duration of the noise are defined as global
 // variables at the top of the program. This function exists in place of
 // the normal Arduino tone() function because tone() uses TIMER2, which 
 // interferes with the 32.768kHz timer used to clock the data logging. 
-void beepbuzzer(void){
-	uint8_t prescalarbits = 0b001;
-	long toggle_count = 0;
-	uint32_t ocr = 0;
-	int8_t _pin = BUZZER_PIN;
-	
+void beepBuzzer(uint16_t frequency, uint16_t duration){
 	// Reset the 16 bit TIMER1 Timer/Counter Control Register A
-    TCCR1A = 0;
-	// Reset the 16 bit TIMER1 Timer/Counter Control Register B
-    TCCR1B = 0;
+  TCCR1A = 0;
 	// Enable Clear Timer on Compare match mode by setting the bit WGM12 to 
 	// 1 in TCCR1B
-    bitWrite(TCCR1B, WGM12, 1);
-	// Set the Clock Select bit 10 to 1, which sets no prescaling
-    bitWrite(TCCR1B, CS10, 1);
-	// Establish which pin will be used to run the buzzer so that we
-	// can do direct port manipulation (which is fastest). 
-    timer1_pin_port = portOutputRegister(digitalPinToPort(_pin));
-    timer1_pin_mask = digitalPinToBitMask(_pin);
+  // Set the Clock Select bit 10 to 1, which sets no prescaling
+  TCCR1B = _BV(WGM12) | _BV(CS10);
 	
-    // two choices for the 16 bit timers: ck/1 or ck/64
-    ocr = F_CPU / frequency / 2 - 1;
-	
-	prescalarbits = 0b001; // 0b001 equals no prescalar 
-      if (ocr > 0xffff)
-      {
-        ocr = F_CPU / frequency / 2 / 64 - 1;
-        prescalarbits = 0b011; // 0b011 equal ck/64 prescalar
-      }
-
-	// For TCCR1B, zero out any of the upper 5 bits using AND that aren't already 
-	// set to 1, and then do an OR with the prescalarbits to set any of the
-	// lower three bits to 1 wherever prescalarbits holds a 1 (0b001).
-    TCCR1B = (TCCR1B & 0b11111000) | prescalarbits;
-
-	// Calculate the toggle count
-    if (duration > 0)
-    {
-      toggle_count = 2 * frequency * duration / 1000;
-    }
-	
-	// Set the OCR for the given timer,
-    // set the toggle count,
-    // then turn on the interrupts
-    OCR1A = ocr; // Store the match value (ocr) that will trigger a TIMER1 interrupt
-    timer1_toggle_count = toggle_count;
-    bitWrite(TIMSK1, OCIE1A, 1); // Set OCEIE1A bit in TIMSK1 to 1.
+  // Set the OCR for the given timer,
+  // set the toggle count,
+  // then turn on the interrupts
+  OCR1A = F_CPU / frequency / 2 - 1; // Store the match value that will trigger a TIMER1 interrupt
+  timer1ToggleCount = 2 * frequency * duration / 1000; // Toggle count (duration > 0)
+  TIMSK1 |= _BV(OCIE1A); // Set OCEIE1A bit in TIMSK1 to 1.
 	// At this point, TIMER1 should now be actively counting clock pulses, and
 	// throwing an interrupt every time the count equals the value of ocr stored
 	// in OCR1A above. The actual toggling of the pin to make noise happens in the 
@@ -598,23 +556,17 @@ void beepbuzzer(void){
 //-----------------------------------------------------
 // Interrupt service routine for TIMER1 counter compare match
 // This should be toggling the buzzer pin to make a beep sound
-ISR(TIMER1_COMPA_vect)
-{
-  if (timer1_toggle_count != 0)
-  {
+ISR(TIMER1_COMPA_vect) {
+  if (timer1ToggleCount > 0) {
     // toggle the pin
-    *timer1_pin_port ^= timer1_pin_mask;
-
-    if (timer1_toggle_count > 0)
-      timer1_toggle_count--;
-  }
-  else
-  {
-	// Set Output Compare A Match Interrupt Enable (OCIE1A) bit to zero
-	// in the TIMSK1 (Timer/Counter1 Interrupt Mask Register) to disable
-	// the interrupt on compare match. 
-    bitWrite(TIMSK1, OCIE1A, 0); 
-    *timer1_pin_port &= ~(timer1_pin_mask);  // keep pin low after stop
+    BUZZER_PORT ^= _BV(BUZZER_PORT_PIN);
+    timer1ToggleCount--;
+  } else {
+    // Set Output Compare A Match Interrupt Enable (OCIE1A) bit to zero
+    // in the TIMSK1 (Timer/Counter1 Interrupt Mask Register) to disable
+    // the interrupt on compare match. 
+    TIMSK1 &= ~_BV(OCIE1A); 
+    BUZZER_PORT &= ~_BV(BUZZER_PORT_PIN);  // keep pin low after stop
   }
 }
 
