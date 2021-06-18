@@ -339,13 +339,13 @@ void loop() {
  * (and are the same as) rtc.setAlarm1. This sleep mode saves more power than
  * lightSleep
  */
-void deepSleep(const DateTime wake_time, Ds3231Alarm1Mode alarm_mode) {
+void deepSleep(const DateTime wakeTime, Ds3231Alarm1Mode alarm_mode) {
 #if ECHO_TO_SERIAL
   Serial.println(F("Entering deep sleep"));
   Serial.flush();
 #endif
   // When the alarm goes off, it will cause the SQW pin of the DS3231 to go low.
-  rtc.setAlarm1(wake_time, alarm_mode);
+  rtc.setAlarm1(wakeTime, alarm_mode);
   set_sleep_mode(SLEEP_MODE_PWR_DOWN); // Saves the most power.
   // Disable interrupts while preparing to sleep. Without doing this, the
   // interrupt could go off before the sleep_cpu() command and leave the device
@@ -427,6 +427,15 @@ void enableTimer() {
 
 
 /*
+ * Interrupt Service Routine used wake the device up from light sleep and tell
+ * it to take a single sample.
+ */
+ISR(TIMER2_OVF_vect) {
+  sampling = true;
+}
+
+
+/*
  * Interrupt Service Routine used to tell the device to stop sampling.
  */
 void stopSamplingISR() {
@@ -480,15 +489,6 @@ void lightSleep() {
   Serial.println(F("Exiting light sleep"));
   Serial.flush();
 #endif
-}
-
-
-/*
- * Interrupt Service Routine used wake the device up from light sleep and tell
- * it to take a single sample.
- */
-ISR(TIMER2_OVF_vect) {
-  sampling = true;
 }
 
 
