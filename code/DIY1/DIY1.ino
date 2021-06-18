@@ -72,8 +72,8 @@ uint8_t oldDay = 0;
 // These values will be obtained from the config.txt file on the SD card if it
 // exists. Otherwise, they will be set to the corresponding default values 
 // above.
-uint16_t sleepDuration = DEFAULT_SLEEP_DURATION;
 TimeSpan samplingDuration = TimeSpan(DEFAULT_SAMPLING_DURATION * 60);
+uint16_t sleepDuration = DEFAULT_SLEEP_DURATION;
 char infoString[INFO_STRING_SIZE] = DEFAULT_INFO_STRING;
 
 // When true, the device will be able to take a sample during the main loop of
@@ -229,8 +229,8 @@ void setup() {
 #endif
 
   sampling = true;
-  enableTimer();
   stopSampling = rtc.now() + samplingDuration;
+  enableTimer();
 }
 
 void loop() {  
