@@ -181,8 +181,8 @@ void setup() {
       do {
         c = configFile.read();
         infoString[i++] = c;
-      } while ((c != '\n' && c != EOF) && (i < INFO_STRING_SIZE - 1));
-      infoString[i] = '\0';
+      } while ((c != '\n' && c != EOF) && (i < INFO_STRING_SIZE));
+      infoString[i - 1] = '\0';
     } else {
 #if ECHO_TO_SERIAL
       Serial.println(F("No info string found. Using default info string:"));
