@@ -58,6 +58,8 @@ DateTime now;
 // CSV file must be started.
 uint8_t oldDay = 0;
 
+char filename[] = OUTPUT_FILE_NAME;
+
 // These values will be obtained from the config.txt file on the SD card if it
 // exists. Otherwise, the corresponding default values will be used.
 uint16_t samplingDuration = DEFAULT_SAMPLING_DURATION;
@@ -252,9 +254,12 @@ void loop() {
 
   // Start a new CSV file each day.
   if (oldDay != now.day()) {
-    char filename[] = OUTPUT_FILE_NAME; // The file name will follow this format.
-    
-    logFile.close();
+    strcpy(filename, OUTPUT_FILE_NAME);
+
+    if (logFile.isOpen()) {
+      logFile.timestamp(T_WRITE, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
+      logFile.close();
+    } 
     
     // If there was an error creating the new log, the device will stop and 
     // blink three times per second until being restarted.
@@ -270,6 +275,7 @@ void loop() {
     logFile.printField(sleepDuration, ',');
     logFile.write(infoString);
     logFile.write("\ndate,time,pressure,temperature\n");
+    logFile.timestamp(T_CREATE | T_WRITE, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
     logFile.sync();
 #if ECHO_TO_SERIAL
     Serial.print(F("Starting new file: ")); 
@@ -322,12 +328,23 @@ void loop() {
 
   } else {
     disableTimer();
+    logFile.close();
 
     // Enter deep sleep for the specified sleepDuration.
     deepSleep(rtc.now() + TimeSpan(0, 0, sleepDuration, 0), DS3231_A1_Minute);
 
+    logFile.open(filename, O_WRITE | O_AT_END);
+    // This will allow the main loop to execute the sampling code.
+    active = true;
+    sampling = true;
     // Prepare to resume sampling.
     enableTimer();
+    // Set an interrupt and alarm to stop sampling after the time specified by
+    // samplingDuration has passed. If sleepDuration is 0, no interrupt is set.
+    if (sleepDuration) {
+      attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
+      rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, samplingDuration, 0), DS3231_A1_Minute);
+   }
   }
 }
 
@@ -412,17 +429,6 @@ void enableTimer() {
 
   // Set the timer to create an interrupt whenever it overflows.
   TIMSK2 = _BV(TOIE2);
-
-  // This will allow the main loop to execute the sampling code.
-  active = true;
-  sampling = true;
-
-  // Set an interrupt and alarm to stop sampling after the time specified by
-  // samplingDuration has passed. If sleepDuration is 0, no interrupt is set.
-  if (sleepDuration) {
-    attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
-    rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, samplingDuration, 0), DS3231_A1_Minute);
-  }
 }
 
 

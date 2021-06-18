@@ -59,6 +59,8 @@ DateTime stopSampling;
 // CSV file must be started.
 uint8_t oldDay = 0;
 
+char filename[] = OUTPUT_FILE_NAME;
+
 // These values will be obtained from the config.txt file on the SD card if it
 // exists. Otherwise, the corresponding default values will be used.
 TimeSpan samplingDURATION = TimeSpan(DEFAULT_SAMPLING_DURATION * 60);
@@ -252,9 +254,12 @@ void loop() {
 
   // Start a new CSV file each day.
   if (oldDay != now.day()) {
-    char filename[] = OUTPUT_FILE_NAME; // The file name will follow this format.
-    
-    logFile.close();
+    strcpy(filename, OUTPUT_FILE_NAME);
+
+    if (logFile.isOpen()) {
+      logFile.timestamp(T_WRITE, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
+      logFile.close();
+    } 
     
     // If there was an error creating the new log, the device will stop and 
     // blink three times per second until being restarted.
@@ -270,6 +275,7 @@ void loop() {
     logFile.printField(sleepDURATION.totalseconds() / 60, ',');
     logFile.write(infoString);
     logFile.write("\ndate,time,pressure,temperature\n");
+    logFile.timestamp(T_CREATE | T_WRITE, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
     logFile.sync();
 #if ECHO_TO_SERIAL
     Serial.print(F("Starting new file: ")); 
@@ -322,10 +328,12 @@ void loop() {
 
   } else {
     disableTimer();
+    logFile.close();
 
     // Enter deep sleep for the specified sleepDURATION.
     deepSleep(rtc.now() + sleepDURATION);
 
+    logFile.open(filename, O_WRITE | O_AT_END);
     // Prepare to resume sampling.
     sampling = true;
     stopSampling = rtc.now() + samplingDURATION;
