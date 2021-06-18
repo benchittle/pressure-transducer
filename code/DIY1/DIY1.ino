@@ -265,7 +265,7 @@ void loop() {
     oldDay = now.day();
   }
 
-  if (now < stopSampling) {
+  if (now < stopSampling || sleepDuration == 0) {
     if (sampling) {
       double pressure = sensor.getPressure(ADC_4096);
       int temperature = sensor.getTemperature(CELSIUS, ADC_512); 
