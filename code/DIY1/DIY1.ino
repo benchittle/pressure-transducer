@@ -273,7 +273,7 @@ void loop() {
 
   if (now < stopSampling || sleepDuration == 0) {
     if (sampling) {
-      double pressure = sensor.getPressure(ADC_4096);
+      float pressure = sensor.getPressure(ADC_4096);
       int temperature = sensor.getTemperature(CELSIUS, ADC_512); 
       
       // Write to SD card:

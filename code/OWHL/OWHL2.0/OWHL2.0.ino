@@ -285,7 +285,7 @@ void loop() {
   // Otherwise, enter deep sleep.
   if (noSleep || now < stopSampling) {
     if (sampling) {
-      double pressure = sensor.getPressure(ADC_4096);
+      float pressure = sensor.getPressure(ADC_4096);
       int temperature = sensor.getTemperature(CELSIUS, ADC_512); 
           
       logFile.printField(now.year(), '-');
