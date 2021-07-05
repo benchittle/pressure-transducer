@@ -198,17 +198,6 @@ F 3 "" H 3200 3300 50  0001 C CNN
 	0    -1   -1   0   
 $EndComp
 $Comp
-L Regulator_Linear:MCP1700-3302E_TO92 U2
-U 1 1 60A696A2
-P 4450 5250
-F 0 "U2" H 4450 5101 50  0000 C CNN
-F 1 "MCP1700-3302E_TO92" H 4450 5010 50  0000 C CNN
-F 2 "Package_TO_SOT_THT:TO-92_Inline" H 4450 5050 50  0001 C CIN
-F 3 "http://ww1.microchip.com/downloads/en/DeviceDoc/20001826D.pdf" H 4450 5250 50  0001 C CNN
-	1    4450 5250
-	1    0    0    -1  
-$EndComp
-$Comp
 L power:VCC #PWR015
 U 1 1 60A6B075
 P 4850 5250
@@ -306,7 +295,7 @@ U 1 1 60A81908
 P 4700 3200
 F 0 "J2" H 4728 3176 50  0000 L CNN
 F 1 "PinHeader_Female_MS5803" H 4728 3085 50  0000 L CNN
-F 2 "Connector_JST:JST_EH_S4B-EH_1x04_P2.50mm_Horizontal" H 4700 3200 50  0001 C CNN
+F 2 "Connector_PinSocket_2.54mm:PinSocket_1x04_P2.54mm_Vertical" H 4700 3200 50  0001 C CNN
 F 3 "~" H 4700 3200 50  0001 C CNN
 	1    4700 3200
 	1    0    0    -1  
@@ -397,5 +386,16 @@ F 2 "Resistor_THT:R_Axial_DIN0309_L9.0mm_D3.2mm_P25.40mm_Horizontal" V 2980 3300
 F 3 "~" H 3050 3300 50  0001 C CNN
 	1    3050 3300
 	0    1    1    0   
+$EndComp
+$Comp
+L Regulator_Linear:MCP1700-3002E_TO92 U2
+U 1 1 60D54F28
+P 4450 5250
+F 0 "U2" H 4450 5101 50  0000 C CNN
+F 1 "MCP1700-3002E_TO92" H 4450 5010 50  0000 C CNN
+F 2 "Package_TO_SOT_THT:TO-92_Inline_Wide" H 4450 5050 50  0001 C CIN
+F 3 "http://ww1.microchip.com/downloads/en/DeviceDoc/20001826D.pdf" H 4450 5250 50  0001 C CNN
+	1    4450 5250
+	1    0    0    -1  
 $EndComp
 $EndSCHEMATC
