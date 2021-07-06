@@ -82,8 +82,8 @@ void loop() {
 		millisVal = millis(); // update millisVal
 		currTime = rtc.now(); // read current time from the rtc
 		Serial.print(F("RTC time: "));
-		char buf[20]; // create a character array to hold the time as a string
-		Serial.println(currTime.toString(buf,21)); // print the time as a string
+		char buf[] = "YYYY-MM-DD @ hh:mm:ss"; // create a character array to hold the time as a string
+		Serial.println(currTime.toString(buf)); // print the time as a string
 	}
 	// When the user has entered a date and time value in the serial 
 	// monitor and hit enter, the following section will execute.
