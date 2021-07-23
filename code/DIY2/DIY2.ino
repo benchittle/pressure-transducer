@@ -12,7 +12,7 @@
 //** If a config file is found, these values will be ignored.
 // The device will wait until this minute value (between 0 and 59) to begin. 
 // Setting a value greater than 59 will cause the device to start immediately.
-#define DEFAULT_START_MINUTE 60
+#define DEFAULT_START_TIME DateTime(2000, 1, 1, 0, 0)
 // Length of time to sample for.
 #define DEFAULT_SAMPLING_DURATION 60
 // Length of time to sleep after sampling for the above duration. Set to 0 for 
@@ -22,6 +22,7 @@
 #define DEFAULT_INFO_STRING "DIY2 Default Info String"
 #define INFO_STRING_SIZE 64
 
+// File naming scheme.
 #define OUTPUT_FILE_NAME "ms2-YYYYMMDD-hhmm.csv"
 #define CONFIG_FILE_NAME "config.txt"
 // Default number of samples to take per second (NOT IMPLEMENTED)
@@ -136,48 +137,67 @@ void setup() {
   // Used for reading data from the config file, if present.
   SdFile configFile;
   // The sensor will sleep until this minute value.
-  uint16_t startMinute = DEFAULT_START_MINUTE;
+  DateTime startTime = DEFAULT_START_TIME;
   // Open the config file if it exists to obtain the start minute, data
   // sampling duration, sleep duration, and info string.
   if (configFile.open(CONFIG_FILE_NAME, O_READ)) {
 #if ECHO_TO_SERIAL
     Serial.println(F("Reading from config file:"));
 #endif
+
     // Determines whether a number was read for each config variable. If one is
     // missing, we assume the config file is wrong and use all default values.
-    bool foundNumberFlag;
+    uint8_t validityFlag = 0;
+    // Store the datetime values for the start time.
+    uint8_t dateTime[5] = {0};
     // An array to store the numeric configuration values.
-    uint16_t configVars[3] = {0};
-    // Reading in a number from the first 3 lines of the file:
+    uint8_t configVars[2] = {0};
+
     char c;
-    for (uint8_t i = 0; i < 3; i++) {
-      foundNumberFlag = false;
+    for (uint8_t i = 0; i < 5; i++) {
+      validityFlag <<= 1;
       // Reading a single character.
       c = configFile.read();
       // Build the number by reading one digit at a time until reaching a 
       // non-numeric character.
       while (c >= '0' && c <= '9') {
-        foundNumberFlag = true;
-        configVars[i] = (10 * configVars[i]) + (uint16_t)(c - '0');
+        validityFlag |= 1;
+        dateTime[i] = (10 * dateTime[i]) + (c - '0');
         c = configFile.read();
       }
-
-      if (!foundNumberFlag) {
-#if ECHO_TO_SERIAL
-        Serial.println(F("Failed to read all config variables. Using default values:"));
-#endif
-        warning(500, 2);
+      if (c != ' ' && i < 4) {
         break;
       }
+    }
+    // Read until the current line ends or the file ends.
+    while (c != '\n' && c != EOF) {
+      c = configFile.read();
+    }
 
-      // Read until the current line ends or the file ends.
-      while (c != '\n' && c != EOF) {
+    // Continue reading information if the first 5 values were read successfully.
+    if (c != EOF && validityFlag == 0b00011111) {
+      // Reading in a number from the 2nd and 3rd lines of the file:
+      for (uint8_t i = 0; i < 2; i++) {
+        validityFlag <<= 1;
+        // Reading a single character.
         c = configFile.read();
+        // Build the number by reading one digit at a time until reaching a 
+        // non-numeric character.
+        while (c >= '0' && c <= '9') {
+          validityFlag |= 1;
+          configVars[i] = (10 * configVars[i]) + (c - '0');
+          c = configFile.read();
+        }
+
+        // Read until the current line ends or the file ends.
+        while (c != '\n' && c != EOF) {
+          c = configFile.read();
+        }
       }
     }
     // Look for the info string if we still haven't reach the end of the file
     // and all other config values have been found. Otherwise, use the default.
-    if (c != EOF && foundNumberFlag) {
+    if (c != EOF && validityFlag == 0b01111111) {
       // Read up to 63 characters on the current line to form the info string.
       uint8_t i = 0;
       do {
@@ -193,10 +213,17 @@ void setup() {
 
     configFile.close();
 
-    // Set these values based on the corresponding config values.
-    startMinute = configVars[0]; // 1st line in file.
-    samplingDuration = configVars[1]; // 2nd line in file.
-    sleepDuration = configVars[2]; // 3rd line in file.
+    if (validityFlag == 0b01111111) {
+      // Set these values based on the corresponding config values.
+      startTime = DateTime(dateTime[0], dateTime[1], dateTime[2], dateTime[3], dateTime[4]); // 1st line in file.
+      samplingDuration = configVars[0]; // 2nd line in file.
+      sleepDuration = configVars[1]; // 3rd line in file.
+    } else {
+#if ECHO_TO_SERIAL
+      Serial.println(F("Invalid config file. Using default values:"));
+#endif
+      warning(500, 2);
+    }
   } else {
 #if ECHO_TO_SERIAL
     Serial.println(F("No config file found. Using default values:"));
@@ -205,8 +232,16 @@ void setup() {
   }
 
 #if ECHO_TO_SERIAL
-  Serial.print(F("startMinute = "));
-  Serial.println(startMinute);
+  Serial.print(F("startTime = "));
+  Serial.print(now.year());
+  Serial.print("-");
+  Serial.print(now.month());
+  Serial.print("-");
+  Serial.print(now.day());
+  Serial.print(F(" @ "));
+  Serial.print(now.hour());
+  Serial.print(F(":"));
+  Serial.println(now.minute());
   Serial.print(F("samplingDuration = "));
   Serial.println(samplingDuration);
   Serial.print(F("sleepDuration = "));
@@ -220,12 +255,12 @@ void setup() {
   // If a startMinute value between 0 and 59 is set, the device will go into 
   // deep sleep until the current minute matches specified minute value.
   // Otherwise, the device will start right away.
-  if ((startMinute < 60) && (now.minute() != startMinute)) {
+  if (startTime > now) {
 #if ECHO_TO_SERIAL
     Serial.println(F("Waiting for startMinute"));
     Serial.flush();
 #endif
-    deepSleep(now + TimeSpan(0, 0, (startMinute - now.minute() + 60) % 60, 0), DS3231_A1_Minute);
+    deepSleep(startTime, DS3231_A1_Minute);
   }
 
 #if ECHO_TO_SERIAL
