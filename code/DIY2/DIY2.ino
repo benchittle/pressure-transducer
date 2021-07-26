@@ -52,7 +52,7 @@ RTC_DS3231 rtc;
 SdFat sd;
 SdFile logFile;
 // Pressure sensor object.
-MS5803 sensor(ADDRESS_HIGH);
+MS5803 sensor(ADDRESS_LOW);
 
 DateTime now;
 // Track the current day value to determine when a new day begins and when a new
