@@ -309,7 +309,7 @@ void loop() {
     logFile.printField(samplingDuration, ',');
     logFile.printField(sleepDuration, ',');
     logFile.write(infoString);
-    logFile.write("\ndate,time,pressure,temperature\n");
+    logFile.write("\ndatetime,pressure,temperature\n");
     logFile.timestamp(T_CREATE | T_WRITE, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
     logFile.sync();
 #if ECHO_TO_SERIAL
@@ -329,7 +329,7 @@ void loop() {
           
       logFile.printField(now.year(), '-');
       logFile.printField(now.month(), '-');
-      logFile.printField(now.day(), ',');
+      logFile.printField(now.day(), ' ');
       logFile.printField(now.hour(), ':');
       logFile.printField(now.minute(), ':');
       logFile.printField(now.second(), ',');
