@@ -467,6 +467,13 @@ void enableTimer() {
 
   // Set the timer to create an interrupt whenever it overflows.
   TIMSK2 = _BV(TOIE2);
+
+  // Set an interrupt and alarm to stop sampling after the time specified by
+  // samplingDuration has passed. If sleepDuration is 0, no interrupt is set.
+  if (sleepDuration) {
+    attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
+    rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, samplingDuration, 0), DS3231_A1_Minute);
+  }
 }
 
 
