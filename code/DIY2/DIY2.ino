@@ -10,20 +10,22 @@
 
 //** The following four config values will be used when no config file is found.
 //** If a config file is found, these values will be ignored.
-// The device will wait until this minute value (between 0 and 59) to begin. 
-// Setting a value greater than 59 will cause the device to start immediately.
+// The device will wait until this time to begin. Setting a value in the past 
+// will cause the device to start immediately.
 #define DEFAULT_START_TIME DateTime(2000, 1, 1, 0, 0)
 // Length of time to sample for.
 #define DEFAULT_SAMPLING_DURATION 60
 // Length of time to sleep after sampling for the above duration. Set to 0 for 
 // continuous sampling.
 #define DEFAULT_SLEEP_DURATION 0
-// Specify an info string to be included in each csv file. 63 characters max.
-#define DEFAULT_INFO_STRING "DIY2 Default Info String"
-#define INFO_STRING_SIZE 64
+// Specify a name for the sensor to use when creating logging files.
+#define DEFAULT_SENSOR_NAME "MS2"
+#define SENSOR_NAME_SIZE 10
 
-// File naming scheme.
-#define OUTPUT_FILE_NAME "ms2-YYYYMMDD-hhmm.csv"
+// The sensor name is combined with the suffix to create the output file name
+// during logging.
+#define OUTPUT_FILE_NAME_SUFFIX "_YYYYMMDD-hhmm.csv"
+// Path to configuration file on SD card if one exists
 #define CONFIG_FILE_NAME "config.txt"
 // Default number of samples to take per second (NOT IMPLEMENTED)
 //#define SAMPLES_PER_SECOND 1
@@ -59,13 +61,13 @@ DateTime now;
 // CSV file must be started.
 uint8_t oldDay = 0;
 
-char filename[] = OUTPUT_FILE_NAME;
+char filename[SENSOR_NAME_SIZE + sizeof(OUTPUT_FILE_NAME_SUFFIX)];;
 
 // These values will be obtained from the config.txt file on the SD card if it
 // exists. Otherwise, the corresponding default values will be used.
 uint16_t samplingDuration = DEFAULT_SAMPLING_DURATION;
 uint16_t sleepDuration = DEFAULT_SLEEP_DURATION;
-char infoString[INFO_STRING_SIZE] = DEFAULT_INFO_STRING;
+char sensorName[SENSOR_NAME_SIZE + 1] = DEFAULT_SENSOR_NAME;
 
 // When the device is active, it will sample at the specified frequency and go
 // into a light sleep between samples. When the device is inactive, it will go
@@ -195,16 +197,16 @@ void setup() {
         }
       }
     }
-    // Look for the info string if we still haven't reach the end of the file
+    // Look for the sensor name if we still haven't reached the end of the file
     // and all other config values have been found. Otherwise, use the default.
     if (c != EOF && validityFlag == 0b01111111) {
       // Read up to 63 characters on the current line to form the info string.
       uint8_t i = 0;
       do {
         c = configFile.read();
-        infoString[i++] = c;
-      } while ((c != '\n' && c != EOF) && (i < INFO_STRING_SIZE));
-      infoString[i - 1] = '\0';
+        sensorName[i++] = c;
+      } while ((c != '\n' && c != EOF) && (i < SENSOR_NAME_SIZE));
+      sensorName[i - 1] = '\0';
     } else {
 #if ECHO_TO_SERIAL
       Serial.println(F("No info string found. Using default info string:"));
@@ -233,21 +235,21 @@ void setup() {
 
 #if ECHO_TO_SERIAL
   Serial.print(F("startTime = "));
-  Serial.print(now.year());
+  Serial.print(startTime.year());
   Serial.print("-");
-  Serial.print(now.month());
+  Serial.print(startTime.month());
   Serial.print("-");
-  Serial.print(now.day());
+  Serial.print(startTime.day());
   Serial.print(F(" @ "));
-  Serial.print(now.hour());
+  Serial.print(startTime.hour());
   Serial.print(F(":"));
-  Serial.println(now.minute());
+  Serial.println(startTime.minute());
   Serial.print(F("samplingDuration = "));
   Serial.println(samplingDuration);
   Serial.print(F("sleepDuration = "));
   Serial.println(sleepDuration);
-  Serial.print(F("infoString = "));
-  Serial.println(infoString);
+  Serial.print(F("sensorName = "));
+  Serial.println(sensorName);
 #endif
   
   now = rtc.now();
@@ -257,7 +259,7 @@ void setup() {
   // Otherwise, the device will start right away.
   if (startTime > now) {
 #if ECHO_TO_SERIAL
-    Serial.println(F("Waiting for startMinute"));
+    Serial.println(F("Waiting for startTime"));
     Serial.flush();
 #endif
     deepSleep(startTime, DS3231_A1_Minute);
@@ -289,7 +291,8 @@ void loop() {
 
   // Start a new CSV file each day.
   if (oldDay != now.day()) {
-    strcpy(filename, OUTPUT_FILE_NAME);
+    strcpy(filename, sensorName);
+    strcat(filename, OUTPUT_FILE_NAME_SUFFIX);
 
     if (logFile.isOpen()) {
       logFile.timestamp(T_WRITE, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
@@ -305,10 +308,10 @@ void loop() {
       error(3);
     }
     // Print a header for the file.
-    logFile.write("samplingDuration,sleepDuration,infoString\n");
+    logFile.write("samplingDuration,sleepDuration,sensorName\n");
     logFile.printField(samplingDuration, ',');
     logFile.printField(sleepDuration, ',');
-    logFile.write(infoString);
+    logFile.write(sensorName);
     logFile.write("\ndatetime,pressure,temperature\n");
     logFile.timestamp(T_CREATE | T_WRITE, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
     logFile.sync();
