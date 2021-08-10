@@ -47,7 +47,32 @@ def read_rbr_xls(path):
     return data.squeeze()
 
 
+def plot_compare(sensor_data):
+    fig, ax = plt.subplots()
+    x = sensor_data.index
+    for s in sensor_data:
+        ax.plot(x, sensor_data[s], "-")
 
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Pressure (mbar)")
+    ax.legend()
+
+
+def plot_against(rbr_data, sensor_data):
+    fig, ax = plt.subplots()
+    ax.plot(sensor_data, rbr_data, "b.")
+
+    ax.set_xlabel(sensor_data.name)
+    ax.set_ylabel("rbr")
+
+
+def get_valid_int(prompt):
+    while True: 
+        try:
+            num = int(input(prompt))
+        except ValueError:
+            print("INVALID INPUT: Enter a valid integer")
+        return num
 
 
 def main():
@@ -91,7 +116,29 @@ def main():
     # sensors against the RBR.
     sensor_stats.loc["r squared"] = sensors_corrected.corrwith(rbr) ** 2
 
-    return
+    all_raw = pd.concat([sensors_raw, rbr_raw], axis=1)
+    
+    menu_string = ("Plotting:\n"
+            "1. Plot the pressure curves of all sensors\n"
+            "2. Plot a sensor's corrected pressure (x axis) against the RBR (y axis)\n"
+            "3. Show plots\n"
+            "4. Quit\n")
+    
+    while True:
+        action = get_valid_int(menu_string)
+            
+        if action == 1:
+            plot_compare(all_raw)
+        elif action == 2:
+            while True:
+                try:
+                    plot_against(rbr, sensors_corrected["S" + str(get_valid_int())])
+                except IndexError:
+
+        else:
+            print("INVALID INPUT: Enter an integer between 1 and 4")
+        
+        
 
 if __name__ == "__main__":
     main()
