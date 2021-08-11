@@ -70,9 +70,10 @@ def get_valid_int(prompt):
     while True: 
         try:
             num = int(input(prompt))
+            return num
         except ValueError:
             print("INVALID INPUT: Enter a valid integer")
-        return num
+        
 
 
 def main():
@@ -133,8 +134,9 @@ def main():
             while True:
                 try:
                     plot_against(rbr, sensors_corrected["S" + str(get_valid_int())])
+                    break
                 except IndexError:
-
+                    print("INVALID INPUT: There is no data for that sensor")
         else:
             print("INVALID INPUT: Enter an integer between 1 and 4")
         
