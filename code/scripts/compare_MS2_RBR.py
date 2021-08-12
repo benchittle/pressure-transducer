@@ -11,12 +11,12 @@ def read_ms2_csvs(INPUT_PATH):
     
     csvs = []
     for file_name in os.listdir(INPUT_PATH):
-        head, extension = os.INPUT_PATH.splitext(file_name)
+        head, extension = os.path.splitext(file_name)
         # Valid name example: S1_20210813-1345.csv
         if extension == ".csv":
             sensor, timestamp = head.split("_")
             data = pd.read_csv(
-                fileINPUT_PATH_or_buffer=INPUT_PATH + file_name, 
+                filepath_or_buffer=INPUT_PATH + file_name, 
                 skiprows=2, 
                 usecols=["datetime", "pressure"], 
                 parse_dates=["datetime"], 
@@ -122,7 +122,13 @@ def main():
     print("\n\nSTATS")
     print(sensor_stats)
     print("\n")
-    
+
+    with pd.ExcelWriter(OUTPUT_PATH) as writer:
+        pd.concat([rbr_raw, sensors_raw], axis=1).to_excel(writer, "Raw")
+        pd.concat([rbr, sensors], axis=1).to_excel(writer, "Time Filtered")
+        pd.concat([rbr, sensors_corrected], axis=1).to_excel(writer, "Corrected")
+        sensor_stats.to_excel(writer, "Stats")
+
     menu_string = ("Plotting:\n"
             "1. Plot the pressure curves of all sensors\n"
             "2. Plot the pressure curves of all sensors within the specified time range\n"
