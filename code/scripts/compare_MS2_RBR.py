@@ -7,6 +7,9 @@ from matplotlib import pyplot as plt
 INPUT_PATH = r"C:\Users\Uni\Desktop\Ben\test" + "\\"
 OUTPUT_PATH = "output.xlsx"
 
+WATER_DENSITY = 998.02 # Kg/m^3
+GRAVITY = 9.806 # N/Kg
+
 def read_ms2_csvs(INPUT_PATH):
     
     csvs = []
@@ -96,9 +99,6 @@ def main():
 
     # Calculate the residuals for each sensors (MS2 - RBR).
     residuals = sensors.subtract(rbr, axis=0)
-    # Calculate the sum of residuals for each sensor. The closer the value is
-    # to 0, the closer the sensor is to the RBR.
-    sensor_stats.loc["sum of residuals"] = residuals.sum()
     # Calculate the mean absolute error for each sensor.
     sensor_stats.loc["mean abs error"] = residuals.abs().mean()
     # Perform a linear regression of each MS2 (x) against the RBR (y) and 
@@ -114,6 +114,8 @@ def main():
     # Calculate the mean absolute error for the corrected values for each 
     # sensor.
     sensor_stats.loc["corrected mean abs error"] = sensors_corrected.subtract(rbr, axis=0).abs().mean()
+    # Calculate the change in depth that would be caused by the corrected error.
+    sensor_stats.loc["relative change in depth"] = (sensor_stats.loc["corrected mean abs error"] * 100) / (GRAVITY * WATER_DENSITY)
 
     # Calculate the coefficient of determination for each of the corrected
     # sensors against the RBR.
