@@ -25,7 +25,7 @@ F 3 "http://ww1.microchip.com/downloads/en/DeviceDoc/ATmega328_P%20AVR%20MCU%20w
 	1    0    0    -1  
 $EndComp
 $Comp
-L Breakouts:DS3231_breakout A2
+L PressureTransducerDIY-rescue:DS3231_breakout-Breakouts A2
 U 1 1 60A4A9F0
 P 4800 2300
 F 0 "A2" H 4472 2259 50  0000 R CNN
@@ -36,7 +36,7 @@ F 3 "" H 4950 2300 50  0001 C CNN
 	-1   0    0    1   
 $EndComp
 $Comp
-L Breakouts:SD_reader_breakout A1
+L PressureTransducerDIY-rescue:SD_reader_breakout-Breakouts A1
 U 1 1 60A4BD05
 P 4800 1300
 F 0 "A1" H 4472 1259 50  0000 R CNN
@@ -306,7 +306,7 @@ U 1 1 60A7261D
 P 3250 5150
 F 0 "J1" H 3100 5250 50  0000 L CNN
 F 1 "JST_Power_Connector_Female" H 2550 4950 50  0000 L CNN
-F 2 "Connector_JST:JST_PH_S2B-PH-K_1x02_P2.00mm_Horizontal" H 3250 5150 50  0001 C CNN
+F 2 "Connector_JST:JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical" H 3250 5150 50  0001 C CNN
 F 3 "~" H 3250 5150 50  0001 C CNN
 	1    3250 5150
 	1    0    0    -1  
