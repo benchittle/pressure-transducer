@@ -138,12 +138,12 @@ void setup() {
 
   // Take a sample pressure reading and make sure it's reasonable.
   float testPressure = sensor.getPressure(ADC_4096);
-  if (testPressure < 0 || testPressure > 14000) {
+  if (testPressure < 0 || testPressure > 4000) {
 #if ECHO_TO_SERIAL
     Serial.println(F("MS5803 error"));
 #endif
     error(4);
-  } else if (testPressure > 1400) {
+  } else if (testPressure > 1000) {
 #if ECHO_TO_SERIAL
     Serial.println(F("Pressure > 1400"));
 #endif
