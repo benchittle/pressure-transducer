@@ -5,7 +5,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 INPUT_PATH = r"E:\OneDrive - University of Windsor\Pressure Transducer Work\Pressure Transducer Tests" + "\\"
-OUTPUT_PATH = "output.xlsx"
+OUTPUT_PATH = r"C:\Users\Ben2020\Documents\GitHub\pressure_transducer\code\scripts\outputstats.csv"
 
 WATER_DENSITY = 998.02 # Kg/m^3
 GRAVITY = 9.806 # N/Kg
@@ -70,21 +70,26 @@ def main():
         test_num = folder.split("_")[1]
 
         sensors_raw = read_ms2_csvs(INPUT_PATH + folder).add_suffix("_" + test_num)
-        rbr_raw = read_rbr_xls(INPUT_PATH + folder).add_suffix("_" + test_num)
+        rbr_raw = read_rbr_xls(INPUT_PATH + folder)#.add_suffix("_" + test_num)
 
         #residuals = []
         print(folder)
         for i, (start, end) in enumerate(zip(start_times, end_times)):
-            sensor_data = sensors_raw.loc[start:end].iloc[60:-60]
+            sensor_data = sensors_raw.loc[start:end].iloc[90:-90]
             rbr_data = rbr_raw.loc[start:end].iloc[60:-60]
             res = sensor_data.subtract(rbr_data, axis=0)
            # residuals.append(res.add_suffix("_" + str(i)))
             sensor_stats.loc["Offset {}".format(i), sensors_raw.columns] = res.mean()
 
+        all_data.append(rbr_raw)
+        all_data.append(sensors_raw)
+
 #        residuals = pd.concat(residuals, axis=1)
  #       residuals = residuals.reindex(sorted(residuals.columns), axis=1)
     
+    all_data = pd.concat(all_data, axis=1)
     sensor_stats.to_csv(OUTPUT_PATH)
+    #all_data.to_csv(OUTPUT_PATH)
 
     print("Done")
     return sensor_stats

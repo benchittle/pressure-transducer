@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import numpy as np
 
-DAY = 3
+DAY = 4
 
 INPUT_PATH = r"E:\OneDrive - University of Windsor\Pressure Transducer Work\Pressure Transducer Tests\peche_day_{}".format(DAY) + "\\"
 OFFSET_INPUT_PATH = r"E:\OneDrive - University of Windsor\Pressure Transducer Work\Pressure Transducer Tests\offsets.csv"
@@ -16,6 +16,12 @@ DAY2_TRANSECTS = [
     "S02", "S04", "S20", "S03", "S05", 
     "S01"]
 DAY3_TRANSECTS = [
+    "S07", "S08", "S09", "S10", "S06",
+    "S12", "S13", "S16", "S15", "S14",  
+    "S17", "S04", "S18", "S03", "S05", 
+    "S01"]
+
+DAY4_TRANSECTS = [
     "S07", "S08", "S09", "S10", "S06",
     "S12", "S13", "S16", "S15", "S14",  
     "S17", "S04", "S18", "S03", "S05", 
@@ -40,8 +46,9 @@ def read_ms2_csvs(input_path):
                 dayfirst=True)
             # Every so often two readings occur in the same second. It's easier
             # to work with the data if we drop these.
-            # ISSUE: THIS DROPS BOTH RATHER THAN JUST ONE OF THE DUPLICATES
-            data.drop_duplicates("datetime", inplace=True)
+            # ISSUE: THIS POSSIBLY DROPS BOTH RATHER THAN JUST ONE OF THE DUPLICATES
+            #data.drop_duplicates("datetime", inplace=True)
+            
             data.set_index("datetime", inplace=True)
             # Rename the data's pressure column to the name of the sensor that 
             # produced it.
