@@ -1,3 +1,8 @@
+"""
+Script for generating some statistics comparing the accuracy of one or more 
+sets of MS2 / DIY2 test data to corresponding RBR test data.
+"""
+
 import os
 
 import pandas as pd

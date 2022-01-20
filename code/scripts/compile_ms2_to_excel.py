@@ -1,3 +1,11 @@
+"""
+Script used to process a day's batch of raw data into a single spreadsheet. The
+spreadsheet will have three sheets: one for the raw data, one for the adjsuted
+data where each column is offset by the corresponding sensor's offset 
+coefficient, and one for the relevent offset coeffiecents that were used.
+"""
+
+
 import os
 
 import pandas as pd
