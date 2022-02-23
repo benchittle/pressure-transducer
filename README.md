@@ -1,5 +1,5 @@
 # DIY Pressure Transducer
-This repository contains code and hardware specifications for a low cost pressure transducer (sensor) designed for monitoring nearshore waves. More specifically, it logs absolute pressure (atmospheric pressure + water pressure) using an MS5803-14BA pressure sensor at a frequency of 1 Hz. The device is powered by two D-cell batteries and can be constructed from parts easily available at hardware stores and electronic component distributers (such as Digi-Key). It has been tested to run for at least a week continuously, but can likely run significantly longer (several months) on fully charged batteries.
+This repository contains code and hardware specifications for a low cost pressure transducer (sensor) designed for monitoring nearshore waves. More specifically, it logs absolute pressure (atmospheric pressure + water pressure) using an MS5803-14BA pressure sensor at a frequency of 1 Hz. The device is powered by two D-cell batteries and can be constructed from parts easily available at hardware stores and electronic component distributers (such as Digi-Key). It has been tested to run for at least a month continuously without fully draining the batteries.
 
 ## Repo Overview
 The repository is split into two parts, [`code/`](/code/) and [`hardware/`](/hardware/).
