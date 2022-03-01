@@ -13,6 +13,18 @@ The sensor will be prepared and assembled within the housing before travelling t
    
 ---
 
+
+# 01-03-2022
+
+## Software for Programming an ESP32
+There is support for ESP32 programming in the Arduino IDE, but I'd like to have the Intellisense perks that come with an editor like VS Code. I have both the Arduino extension and PlatformIO (PIO) extension set up now. I'm thinking it will be best if I begin programming under the Arduino framework (either using the extension directly or under PIO) since I'm familiar with it, and once I have the functionality I want, I may convert to Espressif's framework for the ESP32 (still under PIO) if there are any major benefits for doing so.
+
+
+## Prototyping
+I'll be ordering 2 or 3 FireBeetle boards, 3 or 4 MAX3485 chips (with boards to break out the SOIC-8 package to pin holes), possibly some ethernet ports. I'll also need to pick up some ethernet cable for long range wired communication and power testing. The goal for a prototype is to have each of the 2 or 3 ESP32 boards read from a pressure sensor (MS5803-14BA) and send the data to the same "hub" computer. This will cover the main desired functionality for the finished sensors.
+
+
+
 # 26-02-2022
 
 ## Long Range Data Transmission cont.
