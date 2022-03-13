@@ -7,7 +7,7 @@ The housing design is from [this project](https://coastal.msstate.edu/waves) by 
 | Part                                 | Notes                                                                                             | Image                                                        |
 |--------------------------------------|---------------------------------------------------------------------------------------------------|--------------------------------------------------------------|
 | 10 in. length of 3 in. diameter PVC  |                                                                                                   | ![3 in. PVC](imgs/parts/3in_pvc.webp)                        |
-| ? in. length of 1.5 in. diameter PVC |                                                                                                   | ![1.5 in. PVC](imgs/parts/1_5in_pvc.jpg)                     |
+| 1 in. length of 1.5 in. diameter PVC |                                                                                                   | ![1.5 in. PVC](imgs/parts/1_5in_pvc.jpg)                     |
 | 3 in. diameter Oatey Gripper Cap     |                                                                                                   | ![3 in. Oatey gripper cap](imgs/parts/3in_gripper_cap.webp) |
 | 3 in. diameter PVC cap               | Top must be flat and smooth (branding text sanded off if present).  Edges can be sharp or smooth. | ![3 in. PVC cap](imgs/parts/3in_pvc_cap.jpeg)                 |
 | PVC cement                           | Colour doesn't matter.                                                                            | ![Oatey PVC cement](imgs/parts/pvc_cement.webp)               |
