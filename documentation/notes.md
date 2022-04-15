@@ -10,8 +10,30 @@ These notes begin with the development of a new pressure sensor, after DIY2. Wit
 
 ### Deployment
 The sensor will be prepared and assembled within the housing before travelling to the deployment site. The sensor will be unpowered until it is ready to deploy. At this point, the sensor will be plugged into a power supply / data channel "hub" via a waterproof cable, turning it on. Readings from the sensor should begin being transmitted to the shore hub. If the sensor is functioning properly, it can be deployed underwater after an additional check to make sure the housing is properly sealed.
-   
+
 ---
+---
+
+
+# 14 Apr 2022
+
+## Getting ready to order the parts
+There's a lot of scattered thinking involved when ordering parts for something you haven't fully thought out and tested. The main aspects of the sensor are the same as with DIY2: MS5803-05B pressure transducer (we used an MS5803-14BA for DIY2 but the hardware footprint is identical between all the models), DS3231SN (or DS3231M) RTC breakout, microSD breakout. However, since the parts won't be assembled on a breadboard, I have to think about how I'll be wiring things together. 
+- Like with DIY2, I'm planning on wiring the MS5803 and DS3231 to the same I2C bus to communicate with the ESP32; the question is, what is the fastest and easiest way to merge the 4 wires from the MS5803 and the 4 wires from the DS3231 into 4 wires that feed to the ESP32 I2C bus (and power)? 
+    - I could solder four junctions of three wires. I don't want to do this. I find that oldering wires together is finicky and time consuming. It would also be ideal to have a solution where I can still disconnect each components from one another.
+    - Another solution I looked into was to lead male Dupont wires (or similar) from each of the MS5803 and DS3231 and have them connect to a 2x4 female Dupont connector that would somehow merge them and lead back to the ESP32. The more modular design would be nice, but I'm not quite sure how I would actually merge each pair of wires into one still. This would also likely require the use of a crimping tool and kit, which myself and others who want to build this device would need to buy.
+    - [Wego lever nuts](https://www.wago.com/ca-en/lp-221) are a cool way to join wires, but they could be a bit too expensive to use in bulk. There are other solutions for joining wires like this, likely inexpensive, but also permanent. So finally, here's the solution I'm looking at.
+    - I could design a custom PCB shield for the FireBeetle to mount connectors for the MS5803 cable, the DS3231 (directly or via cable), and even the microSD board. The traces on the PCB would merge the two I2C connections into the ESP32. Everything could remain modular. Soldering through-hole on a PCB is easy. And since the PCB is just for a couple signal connections and through-holes, I could utilize a relatively cheap manufacturer.
+
+## Creating a Custom Shield for the FireBeetle
+The first thought that came to my head when starting this idea was to attach a microSD card port right to the board and ditch the microSD breakout. Hey, I could do the same thing with the DS3231. Actually, I might as well just make the whole ESP32 board myself and -- no. Because then I would have to assemble it myself, and so would anyone else who uses this design. This is one issue I had with the OWHL: if you have the tools to make it, it's the highest quality DIY design you can get. If you don't, it's going to be a daunting investment of time and money that many researchers would not make. Yes, there are board houses that will assemble your PCBs too, but I feel that is beyond the scope of a DIY project like this one.  
+
+So no PCB? Well hold on I didn't say that. The microSD and DS3231 breakout boards are inexpensive (somehow I can buy 4 DS3231SN or M breakout boards on ebay for the price of one DS3231SN chip on Digikey...) and already assembled, that's why we chose them as opposed to making our own PCB with the same components. However, as I mentioned in the above section, the components must now be wired together somehow, rather than connected easily via traces in a PCB. Unless... I just create a shield with a few easy to solder through-hole connectors for the MS5803 cable, DS3231 module, and microSD module that handles all the "wiring" for me. Bingo!
+
+# 05-03-2022
+
+## Change of Plans
+This batch of sensors no longer needs to be wired: instead it will once again be battery powered and save data (most likely) to an SD card, essentially the same as DIY2. At this point, an Arduino nano or pro mini could likely be used instead of a handmade board like DIY2 or the FireBeetle. However, I'd like to continue testing.
 
 
 # 01-03-2022
