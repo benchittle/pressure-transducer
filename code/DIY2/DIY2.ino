@@ -35,6 +35,7 @@
 // Set to 1 to have info appear on the Serial Monitor when plugged into a 
 // computer. Disable during deployment, (set to 0) in order to save battery.
 #define ECHO_TO_SERIAL 0
+#define ECHO_TO_PLOT 0
 
 // This pin is used for detecting an alarm from the RTC and triggering an
 // interrupt to wake the device up.
@@ -86,7 +87,7 @@ volatile bool sampling = true;
  */
 void setup() {
 // Code between these if statements will only be run if ECHO_TO_SERIAL is not 0.
-#if ECHO_TO_SERIAL
+#if ECHO_TO_SERIAL + ECHO_TO_PLOT
   Serial.begin(9600);
 #endif
 
@@ -372,6 +373,11 @@ void loop() {
       Serial.println(temperature);
       Serial.flush();
 #endif //ECHO_TO_SERIAL
+
+#if ECHO_TO_PLOT
+      Serial.println(pressure);
+      Serial.flush();
+#endif //ECHO_TO_PLOT
       
       sampling = false;
     }
