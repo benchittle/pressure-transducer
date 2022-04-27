@@ -1001,6 +1001,9 @@
   (gr_text "32K" (at 108.142 107.992 -90) (layer "F.SilkS") (tstamp f28ee06a-2b79-4887-94fa-a9f8259667dc)
     (effects (font (size 1 1) (thickness 0.15)))
   )
+  (gr_text "Notes for next iteration:\n- put shield header pin outline on front silkscreen\n- maybe change JST pin spacing to 2.54 mm instead of 2 mm\n- change {dblquote}UWindsor Coastal Group{dblquote} to {dblquote}Windsor Coastal Group{dblquote} and increase font size\n- include group logo" (at 143 97) (layer "Cmts.User") (tstamp b1ba92d5-0d41-4be9-b483-47d08dc1785d)
+    (effects (font (size 1 1) (thickness 0.15)) (justify left))
+  )
 
   (segment (start 101.284 141.789) (end 103.545 144.05) (width 0.25) (layer "F.Cu") (net 1) (tstamp 1d1a787c-ff29-4dea-afb5-49b36ba2bc8d))
   (segment (start 101.284 104.69) (end 101.284 141.789) (width 0.25) (layer "F.Cu") (net 1) (tstamp 2fb12f8e-1c00-4daa-9584-e7f5c5de6097))
