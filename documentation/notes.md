@@ -3,13 +3,13 @@
 *Ongoing notes are kept at the top of this file. Dated entries with various thoughts and findings follow.*
 
 ## Overview
-These notes begin with the development of a new pressure sensor, after DIY2. With this new sensor, the goal is to be able to deploy multiple sensors nearshore ~and maintain a wired connection from a central device(s?) on the shore to each sensor underwater. This will supply power to each sensor while also allowing them to transmit readings back to the shore in real time.~
+These notes begin with the development of a new pressure sensor, after DIY2. With this new sensor, the goal is to be able to deploy multiple sensors nearshore ~~and maintain a wired connection from a central device(s?) on the shore to each sensor underwater. This will supply power to each sensor while also allowing them to transmit readings back to the shore in real time.~~
 
 
 ## Sensor Use Cases 
 
 ### Deployment
-The sensor will be prepared and assembled within the housing before travelling to the deployment site. The sensor will be unpowered until it is ready to deploy. ~At this point, the sensor will be plugged into a power supply / data channel "hub" via a waterproof cable, turning it on. Readings from the sensor should begin being transmitted to the shore hub.~ If the sensor is functioning properly, it can be deployed underwater after an additional check to make sure the housing is properly sealed.
+The sensor will be prepared and assembled within the housing before travelling to the deployment site. The sensor will be unpowered until it is ready to deploy. ~~At this point, the sensor will be plugged into a power supply / data channel "hub" via a waterproof cable, turning it on. Readings from the sensor should begin being transmitted to the shore hub.~~ If the sensor is functioning properly, it can be deployed underwater after an additional check to make sure the housing is properly sealed.
 
 ---
 ---
