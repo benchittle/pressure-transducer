@@ -3,16 +3,25 @@
 *Ongoing notes are kept at the top of this file. Dated entries with various thoughts and findings follow.*
 
 ## Overview
-These notes begin with the development of a new pressure sensor, after DIY2. With this new sensor, the goal is to be able to deploy multiple sensors nearshore and maintain a wired connection from a central device(s?) on the shore to each sensor underwater. This will supply power to each sensor while also allowing them to transmit readings back to the shore in real time.
+These notes begin with the development of a new pressure sensor, after DIY2. With this new sensor, the goal is to be able to deploy multiple sensors nearshore ~and maintain a wired connection from a central device(s?) on the shore to each sensor underwater. This will supply power to each sensor while also allowing them to transmit readings back to the shore in real time.~
 
 
 ## Sensor Use Cases 
 
 ### Deployment
-The sensor will be prepared and assembled within the housing before travelling to the deployment site. The sensor will be unpowered until it is ready to deploy. At this point, the sensor will be plugged into a power supply / data channel "hub" via a waterproof cable, turning it on. Readings from the sensor should begin being transmitted to the shore hub. If the sensor is functioning properly, it can be deployed underwater after an additional check to make sure the housing is properly sealed.
+The sensor will be prepared and assembled within the housing before travelling to the deployment site. The sensor will be unpowered until it is ready to deploy. ~At this point, the sensor will be plugged into a power supply / data channel "hub" via a waterproof cable, turning it on. Readings from the sensor should begin being transmitted to the shore hub.~ If the sensor is functioning properly, it can be deployed underwater after an additional check to make sure the housing is properly sealed.
 
 ---
 ---
+
+# 3 May 2022
+
+## Controlling Power to the microSD Card
+Being unfamiliar with the available options for electronic switches, my first thought was to use a BJT (a basic kind of transistor) to toggle the power to the card on and off using a GPIO pin from the MCU (I can't just pin power the card because current spikes during certain operations could exceed the ESP32's max current draw from GPIO pins). The card itself would be connected to the 3V3 line of the FireBeetle board. Unfortunately, it seems BJTs see a relatively large voltage drop across the collector and emitter (I was measuring ~0.5V using an SS8050 NPN transistor) which would knock the voltage down too far for the microSD (it should be at 3.3V). 
+
+A little extra reading introduced me to an alternative solution: MOSFETs. These transistors function similarly to BJTs, but they switch on/off based on a voltage threshold (rather than current with BJTs), and more importantly, they tend to have much lower voltage drops. As of now, my understanding is that a low-side logic-level N-channel MOSFET would be a good choice for this project. (Low-side means the MOSFET goes after the microSD in the circuit, N-channel is like how BJTs have NPN vs. PNP, and logic-level means the threshold voltage of the device is low e.g. 2.5V or lower for a 3.3V MCU.) [This one, the IPP055N03LGXKSA1](https://www.digikey.ca/en/products/detail/infineon-technologies/IPP055N03LGXKSA1/1996759), might do the job.
+
+I might not have time to add this to the current design before the upcoming deployment, however, and this could really impact battery life. Assuming a capacity of 2000mAh in the 3 AA alkaline batteries, and a sleep current of 0.5mA without switching off the microSD, the device would naively last for around 2000/0.5 = 4000 hours. This isn't so bad, but in reality the device will be drawing more current, and sleep current *should* be <0.1mA. When the ESP32 wakes up to take a sample, it could draw several mA of current for a short period of time. Writing to the microSD, even if I can buffer several hours of data, is also capable of eating up current. I can't really estimate the impact on longevity without more tests, but I doubt it will be negligible.
 
 
 # 2 May 2022
@@ -20,7 +29,7 @@ The sensor will be prepared and assembled within the housing before travelling t
 ## Beginning Construction of the First DIY3 Board
 The custom PCB has been designed, ordered, and received. I used JLCPCB as the boardhouse and it turned out great, but as expected, I'm already noticing design issues.
 
-After reading up on the Cave Pearl Project's notes on [saving power with microSD cards](https://thecavepearlproject.org/2017/05/21/switching-off-sd-cards-for-low-power-data-logging/), I realized that I underestimated the power consumption of the microSD card and DS3231. Using some DeepSleep example code from the ESP32 framework for Arduino, and after cutting [a connection on the board itself](https://wiki.dfrobot.com/FireBeetle_Board_ESP32_E_SKU_DFR0654#target_4) (see the "Low Power" pad), I was able to get the FireBeetle's current consumption down to ~10 uA as expected. However, just adding the RTC module and microSD card to the circuit bumped the current consumption up to 0.4 mA to 1.2 mA depending on the microSD card. I'm thinking about dealing with this the same way the Cave Pearl Project did: pin power the RTC module and use a transistor (a BJT) as a switch to toggle the power to the microSD during sleep. Unfortunately, that means I'll have to do some janky soldering on the custom PCB, which I'll have to redesign in the future.
+After reading up on the Cave Pearl Project's notes on [saving power with microSD cards](https://thecavepearlproject.org/2017/05/21/switching-off-sd-cards-for-low-power-data-logging/), I realized that I underestimated the power consumption of the microSD card and DS3231. Using some DeepSleep example code from the ESP32 framework for Arduino, and after cutting [a connection on the board itself](https://wiki.dfrobot.com/FireBeetle_Board_ESP32_E_SKU_DFR0654#target_4) (see the "Low Power" pad), I was able to get the FireBeetle's current consumption down to ~10 uA as expected. However, just adding the RTC module and microSD card to the circuit bumped the current consumption up to between 0.4 mA and 1.2 mA depending on the microSD card. I'm thinking about dealing with this the same way the Cave Pearl Project did: pin power the RTC module and use a transistor (a BJT) as a switch to toggle the power to the microSD during sleep. Unfortunately, that means I'll have to do some janky soldering on the custom PCB, which I'll have to redesign in the future.
 
 
 # 14 Apr 2022
