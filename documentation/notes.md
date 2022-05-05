@@ -14,6 +14,19 @@ The sensor will be prepared and assembled within the housing before travelling t
 ---
 ---
 
+
+# 5 May 2022
+
+## Sleep Current Tests
+Today I wired up a sensor and uploaded a demo of what the setup code will be: initialize the RTC, initialize the SD card, initialize the MS5803-05, and then go to sleep. I then measured the current going to the system under different conditions. 
+
+The ESP32 alone will drain tens of milliamps when it's not sleeping, this is why it will be crucial to make use of the ULP coprocessor (ultra low power) to take measurements if possible, or minimize the time spent awake otherwise. With just the MS5803-05 wired up to the ESP32, I observed around 40mA being drained by the system during the setup code, 0.2mA at the beginning of sleep, and 0.1mA shortly after. This was surprisingly high, since I had observed the ESP32 sleeping at only 0.013mA (or 13uA), and the MS5803-05's datasheet claims it functions at <1uA and sleeps at <0.15uA (150 nano Amps!). 
+
+Continuing with the tests, however, I introduced the DS3231 module into the circuit with [a GPIO pin powering VCC](https://thecavepearlproject.org/2014/05/21/using-a-cheap-3-ds3231-rtc-at24c32-eeprom-from-ebay/) (i.e. the DS3231's VCC is wired to a GPIO pin so it can be easily switched off when I2C is not needed. I noticed that a short delay was needed after reenabling VCC power before you could communicate again). I expected the current consumption to be the same as before once the GPIO pin powering the DS3231 was set to low, but instead the sleep current went even lower: all the way down to 0.013mA, or 13uA, the sleep current of just the ESP32! At first I thought my circuit was either wrong now or wrong in the last setup, but after retesting both circuits, the results were the same. Although I'm not entirely sure why this is the case, I think it has to do with the fact that the design relies on the pull-up resistors found on the DS3231 module for the I2C lines, which weren't present in the previous circuit. Whatever the reason, this result was very promising.
+
+Finally, I introduced the microSD to the circuit. Without a card inserted into the module, the setup consumed no additional current compared to the last test (as one would hope from an open circuit...). With the card, however, around 1.2mA of current was being devoured by the system. In other words, if the only function of this device was to sleep, the microSD card would consume 9000% more energy than the rest of the circuit...
+
+
 # 3 May 2022
 
 ## Controlling Power to the microSD Card
