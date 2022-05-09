@@ -14,6 +14,15 @@ The sensor will be prepared and assembled within the housing before travelling t
 ---
 ---
 
+# 6 May 2022
+
+## Reducing the ESP32's Current Draw 
+There were a number of things one could configure with the ATmega328p to save energy: disabling the ADC, reducing the CPU frequency, etc. With the ESP32, I've been looking into similar functionality. As measured previously, the device with all components attached (FireBeetle board, MS5803-05, DS3231 module, microSD card) drains ~44mA while idle (but not sleeping). The FireBeetle ESP32 is responsible for most of this current draw, given that it's running at a whopping 240MHz and doing... the same thing the ATmega328p was doing at 8MHz (and even that is probably overkill). 
+
+So the first thing to reduce is the CPU frequency, which can easily be done at runtime with the `setCpuFrequencyMhz` function. The [docs](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/power_management.html) only show three frequencies from 240MHz to 80MHz, but more are listed in the header file, all the way down to 10MHz (though below 80MHz you can't make use of WiFi / BlueTooth). 
+
+The ADC seems to be disabled until it's actually needed, so there's nothing to worry about there. As for WiFi and BlueTooth, those are also disabled by default. Those seem to be the easy targets, but if any more modules can be disabled then I'll take note of them.
+
 
 # 5 May 2022
 
