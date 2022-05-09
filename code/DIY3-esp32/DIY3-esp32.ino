@@ -18,11 +18,11 @@
 RTC_DS3231 rtc;
 DateTime now;
 
-MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
+RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
 
 uint8_t oldDay = 0;
 
-
+/*
 void printResetReason(esp_reset_reason_t reason) {
     switch (reason) {
         case ESP_RST_UNKNOWN: Serial.println("unknown"); break;
@@ -38,23 +38,25 @@ void printResetReason(esp_reset_reason_t reason) {
         case ESP_RST_SDIO: Serial.println("sdio"); break;
     }
 }
+*/
 
 
 void setup() {
+    #if ECHO_TO_SERIAL
+        Serial.begin(115200);
+        delay(1000);
+    #endif
+
+    // ADC, WiFi, BlueTooth are disabled by default.        
+    // Default CPU frequency is 240MHz, but we don't need high speed.
+    setCpuFrequencyMhz(10);   
+
+    pinMode(SD_CS_PIN, OUTPUT);
+    pinMode(RTC_POWER_PIN, OUTPUT);
+
+
     switch (esp_reset_reason()) {    
         case ESP_RST_POWERON: {
-            #if ECHO_TO_SERIAL
-                Serial.begin(115200);
-                delay(1000);
-            #endif
-
-            // ADC, WiFi, BlueTooth are disabled by default.        
-            // Default CPU frequency is 240MHz, but we don't need high speed.
-            setCpuFrequencyMhz(10);   
-
-            pinMode(SD_CS_PIN, OUTPUT);
-            pinMode(RTC_POWER_PIN, OUTPUT);
-
             // Initialize the connection with the RTC:
             // Power to the RTC is provided by a GPIO pin. We need to wait a short 
             // duration (10ms seems to work) before connecting to the RTC or it fails.
@@ -91,7 +93,7 @@ void setup() {
             }
 
             // Initialize the connection with the MS5803-05 pressure sensor.
-            if (!sensor.initializeMS_5803(false)) {
+            if (!sensor.initializeMS_5803(true)) {
                 #if ECHO_TO_SERIAL
                     Serial.println(F("MS5803-05 sensor setup error"));
                 #endif
@@ -103,16 +105,30 @@ void setup() {
 
             delay(1000);
             digitalWrite(RTC_POWER_PIN, LOW);
-            esp_deep_sleep(10 * 1000000);
+            Wire.~TwoWire(); // essentially Wire.end(); MIGHT BE UNNECESSARY
+            esp_deep_sleep(1 * 1000000);
 
             break; // switch
         }
 
         case ESP_RST_DEEPSLEEP: {
-            Serial.begin(115200);
             Serial.println("IM AWAAAAKE");
+            
+            // The I2C pull-up resistors are on the DS3231 board which is pin
+            // powered, so that pin must be powered for I2C to work with the 
+            // MS5803.
+            digitalWrite(RTC_POWER_PIN, HIGH);
+
+            // I2C communication needs to be reinitialized after a deep sleep
+            // reset. The sensor.initializeMS_5803() method could be used here
+            // instead but it would add unecessary initialization steps.
+            Wire.begin();
+            sensor.resetSensor();      
+                  
+            sensor.readSensor();
+            Serial.println(sensor.pressure());
             Serial.flush();
-            delay(1000);
+            digitalWrite(RTC_POWER_PIN, LOW);
 
             esp_deep_sleep(10 * 1000000);
 
