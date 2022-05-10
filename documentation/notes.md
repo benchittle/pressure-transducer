@@ -14,6 +14,27 @@ The sensor will be prepared and assembled within the housing before travelling t
 ---
 ---
 
+# 10 May 2022
+
+# Working with the ESP32's ULP Coprocessor
+(I'm just going to call it the ULP). The ULP is one of the main reasons why I considered the ESP32 despite how power hungry it could be. Based on what I read during my research, it seemed that the ULP couldn't be used for very complex tasks, but it could still interact with certain GPIO's, interact with certain memory (that was shared with the main processor), and communicate via I2C. This was perfect, because it would allow me to read from the MS5803 without even having to wake up the main processor! However, diving into the ULP has been quite a challenge so far.
+
+The first thing to figure out is how you're going to program it. If you're using the ESP's native framework, this isn't a problem and it's well documented by Espressif. However, if you're using the Arduino ESP framework (like me), then here's a list of what I've tried:
+1. The [ulptool](https://github.com/duff2013/ulptool) project seemed promising, but I wasn't able to get it working. It might be abandoned at this point, and I don't think it's compatible with newer versions of the ESP Core framework for Arduino. I tried changing to an older version of the framework, but it broke my code and I can't be bothered to migrate backwards.
+2. You can migrate your project to the native framework for the ESP. However, I'm using several libraries built for Arduino, and I don't have time to port them to a different framework, although this would likely be the cleanest option in the end.
+3. It turns out you can program the the ULP at runtime using some [legacy macros](https://docs.espressif.com/projects/esp-idf/en/v3.3.5/api-guides/ulp_macros.html). It's a little janky and there aren't many examples I can find, but so far it's been working in my program. 
+
+If you choose option 3, there's an amazing little project that makes working with the macros *slightly* higher level called [HULP](https://github.com/boarchuz/HULP). It doesn't offer much more in the way of standalone documentation, but most of the functions are commented well, and there are a number of examples. Even better, the project appears to be active still at the time of writing this.
+
+
+## JST Connectors and Crimping
+In DIY2's design, I created a connector for the MS5803-14 using Dupont connectors. Although they're great for prototyping, they aren't the best choice for a finished product. My biggest gripes with them are that they can be plugged in the wrong way and they don't always make a solid connection. 
+
+So as an alternative for this project, I wanted to use JST connectors. They seemed like a good fit since the MS5803-05 wouldn't have to be unplugged from the board very often (JST connectors aren't technically meant for applications where there's a lot of plugging in and unplugging). I included a footprint for the 4-pin PH variant (there's [a lot](https://en.wikipedia.org/wiki/JST_connector) of JST connectors) and then proceeded to buy precrimped wires for the *SH* variant... which used 2.54mm pin spacing instead of the 2mm *PH* footprint on my board. 
+
+Since the 2mm variant is less common, I couldn't find long enough precrimped wires for my design, so I had to order a kit of various JST PH connectors and a pair of Engineer Crimpers off Amazon to crimp my own (make sure you have wire strippers too, and that your wire is the right AWG for the type of JST connector). I found crimping to be much less frustrating than soldering wires to male Dupont header pins, and the end product was a clean and foolproof connector for the MS5803-05 wires.
+
+
 # 6 May 2022
 
 ## Reducing the ESP32's Current Draw 
