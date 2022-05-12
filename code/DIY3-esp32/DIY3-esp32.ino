@@ -11,15 +11,16 @@
 #include "RTClib.h"
 #include "MS5803_05.h" // https://github.com/benchittle/MS5803_05, a fork of Luke Miller's repo: https://github.com/millerlp/MS5803_05
 
-#include "hulp.h"
+//#include "hulp.h"
 
-#define ECHO_TO_SERIAL 1
+#define ECHO_TO_SERIAL 0
 
 #define SD_CS_PIN GPIO_NUM_2
 #define RTC_POWER_PIN GPIO_NUM_26
 #define RTC_ALARM GPIO_NUM_25
 
-#define BUFFER_SIZE 5
+#define FILE_FORMAT "/TEST_YYYYMMDD-hhmm.data"
+#define BUFFER_SIZE 800
 
 
 typedef struct {
@@ -28,12 +29,17 @@ typedef struct {
     int8_t temperature;
 } __attribute__((packed)) entry_t;
 
+
 RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
+
 
 RTC_DATA_ATTR uint8_t oldDay = 0;
 
+RTC_DATA_ATTR char fileName[sizeof(FILE_FORMAT) + 1];
 RTC_DATA_ATTR entry_t buffer[BUFFER_SIZE];
 RTC_DATA_ATTR uint16_t bufferCount = 0;
+    
+
 
 
 void setup() {
@@ -78,6 +84,7 @@ void setup() {
                     Serial.flush();
                 #endif
             }
+            SD.end();
 
             // Initialize the connection with the MS5803-05 pressure sensor.
             if (!sensor.initializeMS_5803(false)) {
@@ -112,7 +119,7 @@ void setup() {
             // powered, so that pin must be powered for I2C to work with the 
             // MS5803.
             digitalWrite(RTC_POWER_PIN, HIGH);
-            // delay(1);
+            //delay(1);
 
             // I2C communication needs to be reinitialized after a deep sleep
             // reset. The sensor.initializeMS_5803() method could be used here
@@ -121,20 +128,27 @@ void setup() {
             rtc.begin();
             now = rtc.now();
 
+            // Reinitialize connection with sensor and take a reading.
             sensor.resetSensor();
             sensor.readSensor();
 
+            // Disable power to the RTC and I2C pull-ups.
+            digitalWrite(RTC_POWER_PIN, LOW);
+
             #if ECHO_TO_SERIAL
-                Serial.printf("Time: %d-%02d-%02d %02d:%02d:%02d \tPressure: %f \tTemp: %d\n", now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(), sensor.pressure(), (int8_t) sensor.temperature());
+                Serial.printf("Buffer: %d \tTime: %d-%02d-%02d %02d:%02d:%02d \tPressure: %f \tTemp: %d\n", bufferCount, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(), sensor.pressure(), (int8_t) sensor.temperature());
                 Serial.flush();
             #endif
 
+            // Add a reading to the buffer.
             buffer[bufferCount] = {
                 .timestamp = now.unixtime(),
                 .pressure = sensor.pressure(),
                 .temperature = (int8_t) sensor.temperature()
             };
             bufferCount++;
+
+            // If the buffer is full, dump it to the SD card.
             if (bufferCount == BUFFER_SIZE) {
                 #if ECHO_TO_SERIAL
                     Serial.printf("Dumping to card...\n");
@@ -153,26 +167,39 @@ void setup() {
                     Serial.printf("Card Size: %d\n", SD.cardSize());
                 #endif
 
-                char fName[] = "/TEST";//_YYYYMMDD-hhmm.csv";
-                //now.toString(fName);
-                File f = SD.open(fName, "w", true);
-                if (f == NULL) {
+                // Open a file for logging the data. If it's the first dump of
+                // the day, start a new file.
+                File f;
+                if (oldDay != now.day()) {
+                    strcpy(fileName, FILE_FORMAT);
+                    now.toString(fileName);
+                    f = SD.open(fileName, FILE_WRITE, true);
+                    oldDay = now.day();
+                } else {
+                    f = SD.open(fileName, FILE_APPEND, false);
+                }
+                if (!f) {
                     #if ECHO_TO_SERIAL
                         Serial.println("Failed to open file");
                         Serial.flush();
                     #endif
                     break;
                 }
+                // Write the data buffer as a sequence of bytes (it's vital that
+                // the entry_t struct is packed, otherwise there will be garbage
+                // bytes in between each entry that will waste space.)
                 size_t written = f.write((uint8_t*) buffer, bufferCount * sizeof(entry_t));
+                f.close();
+                SD.end();
                 #if ECHO_TO_SERIAL
                     Serial.printf("Wrote %lu bytes to file\n", written);
                     Serial.flush();
                 #endif
 
+                // Reset the buffer count.
                 bufferCount = 0;
             }
 
-            digitalWrite(RTC_POWER_PIN, LOW);
 
             #if ECHO_TO_SERIAL
                 Serial.printf("Going to sleep...\n");
@@ -189,6 +216,7 @@ void setup() {
                 Serial.println("RESET REASON CASE NOT HANDLED");
                 Serial.flush();
             #endif
+            break;
     }
     #if ECHO_TO_SERIAL
         Serial.println("CONTROL EXIT");
