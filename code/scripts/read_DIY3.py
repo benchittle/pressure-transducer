@@ -12,4 +12,4 @@ for i in range(0, len(data), 9):
     pressure = struct.unpack("<f", data[i + 4 : i + 8])[0]
     temperature = struct.unpack("<B", data[i + 8 : i + 9])[0]
 
-print(f"Time: {timestr}\nPressure: {pressure}\nTemperature: {temperature}")
+    print(f"Time: {timestr} \tPressure: {pressure} \tTemperature: {temperature}")
