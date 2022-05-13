@@ -1,7 +1,4 @@
 
-#include <driver/adc.h>
-#include <esp_wifi.h>
-#include <esp_bt.h>
 #include <esp32/ulp.h>
 
 // Additional includes for peripheral devices
@@ -13,14 +10,14 @@
 
 //#include "hulp.h"
 
-#define ECHO_TO_SERIAL 0
+#define ECHO_TO_SERIAL 1
 
-#define SD_CS_PIN GPIO_NUM_2
+#define SD_CS_PIN GPIO_NUM_2 // TODO: Change this pin: FireBeetle uses it for LED
 #define RTC_POWER_PIN GPIO_NUM_26
 #define RTC_ALARM GPIO_NUM_25
 
 #define FILE_FORMAT "/TEST_YYYYMMDD-hhmm.data"
-#define BUFFER_SIZE 800
+#define BUFFER_SIZE 800 // A few more bytes and we'd be out of RTC space
 
 
 typedef struct {
@@ -38,9 +35,6 @@ RTC_DATA_ATTR uint8_t oldDay = 0;
 RTC_DATA_ATTR char fileName[sizeof(FILE_FORMAT) + 1];
 RTC_DATA_ATTR entry_t buffer[BUFFER_SIZE];
 RTC_DATA_ATTR uint16_t bufferCount = 0;
-    
-
-
 
 void setup() {
     #if ECHO_TO_SERIAL
@@ -140,7 +134,7 @@ void setup() {
                 Serial.flush();
             #endif
 
-            // Add a reading to the buffer.
+            // Create a new data entry and add it to the buffer.
             buffer[bufferCount] = {
                 .timestamp = now.unixtime(),
                 .pressure = sensor.pressure(),
@@ -172,6 +166,7 @@ void setup() {
                 File f;
                 if (oldDay != now.day()) {
                     strcpy(fileName, FILE_FORMAT);
+                    // Format the file name with the current date and time.
                     now.toString(fileName);
                     f = SD.open(fileName, FILE_WRITE, true);
                     oldDay = now.day();
@@ -187,7 +182,9 @@ void setup() {
                 }
                 // Write the data buffer as a sequence of bytes (it's vital that
                 // the entry_t struct is packed, otherwise there will be garbage
-                // bytes in between each entry that will waste space.)
+                // bytes in between each entry that will waste space). In order
+                // to use this data later, we'll have to unpack it using a 
+                // postprocessing script.
                 size_t written = f.write((uint8_t*) buffer, bufferCount * sizeof(entry_t));
                 f.close();
                 SD.end();
