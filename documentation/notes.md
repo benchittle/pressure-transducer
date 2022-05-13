@@ -14,6 +14,17 @@ The sensor will be prepared and assembled within the housing before travelling t
 ---
 ---
 
+# 11 May 2022
+
+# Problem with ULP and I2C
+As I started looking into the issue of how to communicate to the MS5803-05 using the ULP and I2C, I ran into an immediate problem that I hadn't accounted for: the ULP uses different pins for I2C than the main processor. In fact, the ULP can't even interact with the default I2C pins since they aren't RTC GPIO pins. This is a problem, since I would have to further modify each sensor board by hand, soldering connections from the ULP accessible I2C pins to the default I2C pins, in order to make use of the ULP. It's doable, but adds more assembly time and room for human error. Plus, I'm not familiar enough with I2C to be confident that I can implement it on time in ULP assembly. So, for the time being, I'm going to put the ULP approach on the backburner and use the same approach as DIY2: wake up the main processor every second, read in a sample, and go back to sleep. A major improvement I can still make here is to buffer the data, and only save it to the microSD a few times a day.
+
+# Smaller microSD cards
+I ordered some [512MB cards](https://www.adafruit.com/product/5252) from Adafruit ([through DigiKey](https://www.digikey.ca/short/tnh7294f)). 512MB is plenty for this kind of data logging, assuming the data is stored efficiently (i.e. as binary data, which will need some post-processing to be readable). Although I haven't tested all the cards yet, they appear to draw significantly less current. Compared to the 32GB Sandisk card which drained >1mA while idle, the 512MB card was only drawing just under 0.4mA. While this is still a lot, it's a noteable improvment.
+
+If each reading takes a 4 byte timestamp, a 4 byte float (pressure), and a 1 byte int (temperature), then each reading will require 9 bytes. Assuming 400,000,000 Bytes of space (I want to account for any bad memory or packing that might go on under the hood), then the card will be able to store approximately `400,000,000 Bytes / 9 Bytes = 44,444,444 samples`. Assuming a sampling rate of 1Hz, then the sensor will have space to run for 514 days. If this isn't enough, then we can remove the timestamp from each reading and instead assume each reading is 1 second apart. This method would only require 5 bytes per reading, leaving room for 80,000,000 samples or 925 days of data at 1Hz.
+
+
 # 10 May 2022
 
 # Working with the ESP32's ULP Coprocessor
@@ -24,7 +35,7 @@ The first thing to figure out is how you're going to program it. If you're using
 2. You can migrate your project to the native framework for the ESP. However, I'm using several libraries built for Arduino, and I don't have time to port them to a different framework, although this would likely be the cleanest option in the end.
 3. It turns out you can program the the ULP at runtime using some [legacy macros](https://docs.espressif.com/projects/esp-idf/en/v3.3.5/api-guides/ulp_macros.html). It's a little janky and there aren't many examples I can find, but so far it's been working in my program. 
 
-If you choose option 3, there's an amazing little project that makes working with the macros *slightly* higher level called [HULP](https://github.com/boarchuz/HULP). It doesn't offer much more in the way of standalone documentation, but most of the functions are commented well, and there are a number of examples. Even better, the project appears to be active still at the time of writing this.
+If you choose option 3, there's an amazing little project that makes working with the macros *slightly* higher level called [HULP](https://github.com/boarchuz/HULP). It doesn't offer much more in the way of standalone documentation, but most of the functions are commented well, and there are a number of examples. Even better, the project appears to be active at the time of writing this.
 
 
 ## JST Connectors and Crimping
