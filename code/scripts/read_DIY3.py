@@ -1,15 +1,25 @@
 import struct
 from datetime import datetime
+import pandas as pd
+import os
 
-FILEPATH = "/run/media/benc/C401-E15D/TEST"
+INPATH = "/run/media/benc/C401-E15D/"
+OUTPATH = "~/Documents/DIY3_out/"
 
-with open(FILEPATH, "rb") as file:
-    data = file.read()
+for fname in os.listdir(INPATH):
+    name, ext = os.path.splitext(fname)
+    if (ext == ".data"):
+        with open(INPATH + fname, "rb") as file:
+            raw = file.read()
 
-for i in range(0, len(data), 9):
-    timestamp = struct.unpack("<i", data[i : i + 4])[0]
-    timestr = datetime.utcfromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-    pressure = struct.unpack("<f", data[i + 4 : i + 8])[0]
-    temperature = struct.unpack("<B", data[i + 8 : i + 9])[0]
+        unpacked = {"timestamp":[], "pressure":[], "temperature":[]}
+        for i in range(0, len(raw), 9):
+            timestamp = struct.unpack("<i", raw[i : i + 4])[0]
+            unpacked["timestamp"].append(datetime.utcfromtimestamp(timestamp))
+            unpacked["pressure"].append(struct.unpack("<f", raw[i + 4 : i + 8])[0])
+            unpacked["temperature"].append(struct.unpack("<B", raw[i + 8 : i + 9])[0])
 
-    print(f"Time: {timestr} \tPressure: {pressure} \tTemperature: {temperature}")
+            #print(f"Time: {timestr} \tPressure: {pressure} \tTemperature: {temperature}")
+
+        data = pd.DataFrame(unpacked)
+        data.to_csv(OUTPATH + name + ".csv", index=False)
