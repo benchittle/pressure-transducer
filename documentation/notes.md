@@ -14,6 +14,24 @@ The sensor will be prepared and assembled within the housing before travelling t
 ---
 ---
 
+# 23 May 2022
+
+# Solution to Problem with the DS3231 Module
+After several days of tinkering with the module and some code (most of which was spent forgetting that binary numbers must be prefixed with 0b...), I've come to a workaround for the problems mentioned previously. 
+
+Firstly, I removed most of the components from the DS3231 module, including the troublesome resistor blocks. Since pull up resistors are still needed for I2C, I added some to the ESP32 shield instead. Now that the pull up resistors are independent of the module, I can even communicate with the DS3231 when it's on battery backup power (though I2C may drain the coin cell faster), and I don't need to turn on the DS3231 to read from the MS5803-05. The other components (the EEPROM and its resistor block) were removed from the module simply because I don't use them, and I don't want them wasting energy.
+
+Secondly, I switched from Adafruit's [RTClib](https://github.com/adafruit/RTClib) to a less sophisticated [library](https://github.com/rodan/ds3231) for the DS3231. There's a lot going on under the hood in RTClib, and I couldn't figure out an easy way to keep an RTC_DS3231 object persisting across a deep sleep reset (just storing the object as a RTC_DATA_ATTR wasn't enough). This means I have to recreate the object after every reset, which seems like unnecessary work. The new library is lower level and not as polished or documented, but I was able to get it working. Currently, I have some working [code](../code/DIY3-esp32/testing/ds3231_battery_alarm/) to read the time, set an alarm to pulse every second, and then operate only in battery backup mode. All that's left is to make sure the library will work nicely with deep sleep resets (it should since it's just functions, no global variables / OOP). 
+
+
+# 13 May 2022
+
+# Problem with the DS3231 Module
+I've been trying to generate alarms using the DS3231 module in order to wake up the ESP32. Most libraries make this easy when the chip is powered (VCC is powered, that is), but a certain control register bit must be set in order for this to work only on battery power. However, even after setting this bit, I haven't been able to generate alarms or a squarewave once the DS3231's VCC power is set to low. 
+
+After looking around a bit, I came across a forum post that mentioned that the INT/SQW pin is actually connected to VCC via a resistor (see the [schematic](https://www.onetransistor.eu/2019/07/zs042-ds3231-battery-charging-circuit.html)). These resistor blocks, which are also the pull-up resistors for I2C in the design, are now becoming a bit of a headache rather than a conveniance. Currently, in order to communicate with either the DS3231 *or the MS5803-05*, the DS3231 module has to have power on its VCC, which I power via a GPIO pin. This is because I2C requires pull up resistors to work, and those pull up resistors are connected to the DS3231 module's VCC. However, having learned that the INT/SQW pin is also pulled up here (unnecessarily, since I can just use the INPUT_PULLUP mode of the ESP's GPIO pins), I've now realized that the module also must have VCC power when I want to use the alarms (i.e. always)! Otherwise, if VCC is not powered, the resistors become pull down resistors and overpower the ESP32's internal pull ups. And since the DS3231's alarm is active low, it will look like the alarm is always active. Not good.
+
+
 # 11 May 2022
 
 # Problem with ULP and I2C
