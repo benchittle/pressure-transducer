@@ -1,4 +1,16 @@
+/*
+ * This file contains code for experimenting with with a DS3231 module.
+ * The DS3231 module has been stripped down to just the DS3231, 2 capacitors,
+ * and a coin cell holder. 
+ * 
+ * The program first initializes the DS3231 and gets the time. Then, the once per
+ * second alarm is enabled on the DS3231 and used to trigger an interrupt on the 
+ * ESP32. Finally, VCC power to the DS3231 is disabled to make sure it will 
+ * continue to run on just a battery.
+ */
 
+
+#include <Wire.h>
 #include "RTClib.h"
 
 #define ECHO_TO_SERIAL 1
@@ -20,12 +32,16 @@
 #define DS3231_CONTROL_EOSC	    0x80	/* not Enable Oscillator, 0 equal on */
 //////////////////////////////////////
 
+// Flag that will be set to 1 whenever an interrupt is observed.
 volatile boolean isInt = 0;
 
 RTC_DS3231 rtc;
 
-void IRAM_ATTR interrupt() {
+void IRAM_ATTR interruptHandler() {
     isInt = 1;
+    // Detach interrupts while we handle this one, otherwise we'll get stuck in
+    // a neverending stream of interrupts.
+    detachInterrupt(RTC_ALARM);
 }
 
 
@@ -37,8 +53,9 @@ void setup() {
     pinMode(RTC_POWER_PIN, OUTPUT);
     // The DS3231's alarm is active low, so we need to pull it high.
     pinMode(RTC_ALARM, INPUT_PULLUP);
-    // The DS3231's VCC is hooked up to a GPIO pin, so we need to
-    // provide power before attempting I2C.
+    // The DS3231's VCC is hooked up to a GPIO pin, so we need to provide power
+    // before attempting I2C.
+
     digitalWrite(RTC_POWER_PIN, HIGH);
     // Short delay for RTC to switch from battery to VCC.
     delay(5);
@@ -46,10 +63,12 @@ void setup() {
         Serial.println("RTC Fail");
         return;
     }
-    // Clear any previous alarm
+    // Clear any previous alarms.
+    rtc.disableAlarm(1);
     rtc.clearAlarm(1);
-    // We won't be using alarm 2, so clear it.
-    rtc.disableAlarm(2);
+    // We won't be using alarm 2.
+    rtc.disableAlarm(2); // Clear alarm enabled flag?
+    rtc.clearAlarm(2); // Clear alarm fired flag?
 
     // Print out the time as a sanity check.
     DateTime now = rtc.now();
@@ -63,42 +82,48 @@ void setup() {
     delay(5);
     now = rtc.now();
     Serial.printf("%d-%02d-%02d %02d:%02d:%02d\n", now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
+    
 
-    // Enable battery backed square wave / maybe alarms too?
+    // Set BBSQW (battery backed square wave) bit in DS3231 control register. 
+    // This allows us to generate alarm pulses while the chip is powered only by
+    // battery. Also set other default values.
     Wire.beginTransmission(DS3231_I2C_ADDR);
     Wire.write(DS3231_CONTROL_ADDR);
-    Wire.write(DS3231_CONTROL_BBSQW);
+    Wire.write(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
     Wire.endTransmission();
 
-    // Set the alarm to repeat every second. The time provided doesn't matter (?)
-    //rtc.setAlarm1(rtc.now(), DS3231_A1_PerSecond);
-
-    // TODO: Desolder the resistor array on the DS3231 and use my own 
-    // pull ups somewhere else.
-
-    rtc.writeSqwPinMode(DS3231_SquareWave1Hz);
-
+    // Set the alarm to repeat every second. The time provided doesn't matter.
+    rtc.setAlarm1(rtc.now(), DS3231_A1_PerSecond);
 
     // Attach a simple interrupt to be triggered when the alarm activates
-    // (active low). I've noticed that the interrupt doesn't work if the 
-    // trigger level is set to LOW (the voltage hovers just above 0V) but
-    // a FALLING condition does work.
-    attachInterrupt(RTC_ALARM, interrupt, FALLING);
-    
+    // (active low).
+    Serial.println("Attaching...");
+    attachInterrupt(RTC_ALARM, interruptHandler, ONLOW); // ONLOW and ONHIGH, not LOW and HIGH
 }
+
 int count = 0;
 void loop() {
-
+    // Print a message whenever there is an interrupt
     if (isInt) {
-        digitalWrite(RTC_POWER_PIN, HIGH);
-        delay(5);
+        // Clear the alarm signal so we don't instantly trigger another 
+        // interrupt when we enable them again. It will be set again at the 
+        // next second.
         rtc.clearAlarm(1);
-        Serial.print("high @ ");
+
+        Serial.print("low @ ");
         Serial.println(millis());
         isInt = 0;
         count++;
+
+        // Attach the interrupt again.
+        attachInterrupt(RTC_ALARM, interruptHandler, ONLOW);
     }
+
+    // After 5 interrupts, disable VCC power to the DS3231. It should continue
+    // to run on battery power.
     if (count == 5) {
         digitalWrite(RTC_POWER_PIN, LOW);
+        Serial.println("OFF");
+        count++;
     }
 }
