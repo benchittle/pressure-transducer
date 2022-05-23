@@ -11,7 +11,7 @@
 
 
 #include <Wire.h>
-#include "ds3231.h"
+#include "ds3231.h" // https://github.com/rodan/ds3231
 
 #define RTC_POWER_PIN GPIO_NUM_26
 #define RTC_ALARM GPIO_NUM_25

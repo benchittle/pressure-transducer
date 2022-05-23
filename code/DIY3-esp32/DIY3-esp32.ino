@@ -5,7 +5,7 @@
 #include <FS.h>
 #include <SD.h>
 #include <SPI.h>
-#include "RTClib.h"
+#include "RTClib.h" // https://github.com/adafruit/RTClib
 #include "MS5803_05.h" // https://github.com/benchittle/MS5803_05, a fork of Luke Miller's repo: https://github.com/millerlp/MS5803_05
 
 //#include "hulp.h"
@@ -164,7 +164,7 @@ void setup() {
                 // Open a file for logging the data. If it's the first dump of
                 // the day, start a new file.
                 File f;
-                if (oldDay != now.day()) {
+                if (oldDay != now.day()) { // TODO: Use RTC date so we don't overwrite same day data if sensor is restarted
                     strcpy(fileName, FILE_FORMAT);
                     // Format the file name with the current date and time.
                     now.toString(fileName);
