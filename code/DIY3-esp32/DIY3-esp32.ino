@@ -25,7 +25,7 @@
 
 // Number of readings we can store in a buffer before we run out of RTC memory
 // and need to dump to the SD card.
-#define BUFFER_SIZE 800 
+#define BUFFER_SIZE 800
 
 // A custom struct to store a single data entry.
 // NOTE: __attribute__((packed)) tells the compiler not to add additional 
@@ -46,7 +46,8 @@ RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
 RTC_DATA_ATTR char fileName[FILE_NAME_SIZE];
 RTC_DATA_ATTR uint8_t oldDay = 0;
 
-
+// An array to buffer data before saving it to the SD card. This reduces the
+// number of writes and therefore energy consumption.
 RTC_DATA_ATTR entry_t buffer[BUFFER_SIZE];
 RTC_DATA_ATTR uint16_t bufferCount = 0;
 
@@ -68,14 +69,12 @@ void setup() {
         case ESP_RST_POWERON: {
             Wire.begin();
             // Initialize the connection with the RTC:
-            // Power to the RTC is provided by a GPIO pin. We need to wait a short 
-            // duration (a few ms seems to work) before connecting to the RTC or it fails.
-            // This might be because it has to switch from battery power to VCC power.
+            // Power to the RTC is provided by a GPIO pin. 
             digitalWrite(RTC_POWER_PIN, HIGH);
 
             // According to the datasheet, the oscillator takes <1 sec to begin (on 
             // first time startup), so we wait 1 second in case this is the first time
-            // startup. This accounts for the delay mentioned above, too.
+            // startup. 
             delay(1000); 
 
             // Set BBSQW (battery backed square wave) bit in DS3231 control 
@@ -124,8 +123,9 @@ void setup() {
                 Serial.flush();
             #endif
 
-            // Enter deep sleep until the next alarm pulse.
+             // Make the ESP32 wake up when the alarm goes off (i.e. goes low). 
             esp_sleep_enable_ext0_wakeup(RTC_ALARM, 0);
+            // Enter deep sleep.
             esp_deep_sleep_start();
 
             break; // switch (we don't actually reach this because of sleep)
@@ -144,7 +144,6 @@ void setup() {
             // cell during I2C, but the power savings may be negligible.
             // TODO: Test battery life operating the RTC using ONLY coin cell.
             digitalWrite(RTC_POWER_PIN, HIGH);
-            delay(1);
 
             // Clear the RTC's alarm signal until the next second.
             DS3231_clear_a1f();
@@ -195,12 +194,14 @@ void setup() {
                 // Open a file for logging the data. If it's the first dump of
                 // the day, start a new file.
                 File f;
-                if (oldDay != timeNow.mday) { // TODO: Use RTC date so we don't overwrite same day data if sensor is restarted
+                if (oldDay != timeNow.mday) {
                     // Generate the file name with the current date and time.
                     snprintf(fileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                    // Open a new file for the data.
                     f = SD.open(fileName, FILE_WRITE, true);
                     oldDay = timeNow.mday;
                 } else {
+                    // Open an existing file and append the data to it.
                     f = SD.open(fileName, FILE_APPEND, false);
                 }
                 if (!f) {
@@ -232,10 +233,12 @@ void setup() {
                 Serial.flush();
             #endif
 
+            // Make the ESP32 wake up when the alarm goes off (i.e. goes low). 
             esp_sleep_enable_ext0_wakeup(RTC_ALARM, 0);
+            // Enter deep sleep.
             esp_deep_sleep_start();
 
-            break; // switch
+            break; // switch (we don't actually reach this because of sleep)
         }
 
         default: 
@@ -243,7 +246,7 @@ void setup() {
                 Serial.println("RESET REASON CASE NOT HANDLED");
                 Serial.flush();
             #endif
-            break;
+            break; // switch
     }
     #if ECHO_TO_SERIAL
         Serial.println("CONTROL EXIT");
