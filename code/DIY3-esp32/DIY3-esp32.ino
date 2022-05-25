@@ -13,15 +13,15 @@
 
 #define ECHO_TO_SERIAL 1
 
-#define SD_CS_PIN GPIO_NUM_2 // TODO: Change this pin: FireBeetle uses it for LED
+#define SD_CS_PIN GPIO_NUM_13 // TODO: Change this pin: FireBeetle uses it for LED
 #define RTC_POWER_PIN GPIO_NUM_26
 #define RTC_ALARM GPIO_NUM_25
 
 // /NAME_YYYYMMDD-hhmm.data is the format.
-#define FILE_NAME_FORMAT "/TEST_%04d%02d%02d-%02d%02d.data"
+#define FILE_NAME_FORMAT "/%7s_%04d%02d%02d-%02d%02d.data"
 // The format specifiers take up more room than the formatted string will, so we 
-// subtract the extra space from the size.
-#define FILE_NAME_SIZE (sizeof(FILE_NAME_FORMAT) - 8)
+// subtract the extra space from the size. Then add room for DIY3-XX part.
+#define FILE_NAME_SIZE (sizeof(FILE_NAME_FORMAT) - 11 + 7)
 
 // Number of readings we can store in a buffer before we run out of RTC memory
 // and need to dump to the SD card.
@@ -41,6 +41,8 @@ typedef struct {
 // Initialize a sensor object for interacting with the MS5803-05
 RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
 
+// Store the device's name (max 7 characters).
+RTC_DATA_ATTR char deviceName[8] = {0};
 // We need to store the name for the current data file across deep sleep 
 // restarts.
 RTC_DATA_ATTR char fileName[FILE_NAME_SIZE];
@@ -86,6 +88,11 @@ void setup() {
             DS3231_clear_a1f();
             DS3231_clear_a2f();
 
+            // Set the current day value.
+            struct ts timeNow;
+            DS3231_get(&timeNow);
+            oldDay = timeNow.mday;
+
             // Start the once-per-second alarm on the DS3231:
             // These flags set the alarm to be in once-per-second mode.
             const uint8_t flags[] = {1,1,1,1,0};
@@ -104,6 +111,29 @@ void setup() {
                     Serial.flush();
                 #endif
             }
+
+            // Get device's name from SD card or use default.
+            File config = SD.open("/config.txt", FILE_READ, false);
+            if (!config) {
+                strcpy(deviceName, "DIY3-XX");
+            } else {
+                config.read((uint8_t*) deviceName, sizeof(deviceName) - 1);
+                config.close();
+            }
+            #if ECHO_TO_SERIAL
+                Serial.printf("Device Name: %s\n", deviceName);
+            #endif
+            
+            // Generate the first file.
+            snprintf(fileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+            File f = SD.open(fileName, FILE_WRITE, true);
+            if (!f) {
+                #if ECHO_TO_SERIAL
+                    Serial.println("Failed to create first file...");
+                #endif
+                break; // switch
+            }
+            f.close();
             SD.end();
 
 
@@ -133,7 +163,7 @@ void setup() {
 
         case ESP_RST_DEEPSLEEP: {
             #if ECHO_TO_SERIAL    
-                Serial.println("IM AWAAAAKE");
+                Serial.println("Awake!");
                 Serial.flush();
             #endif
 
@@ -189,6 +219,7 @@ void setup() {
 
                 #if ECHO_TO_SERIAL
                     Serial.printf("Card Size: %d\n", SD.cardSize());
+                    Serial.flush();
                 #endif
 
                 // Open a file for logging the data. If it's the first dump of
@@ -196,7 +227,7 @@ void setup() {
                 File f;
                 if (oldDay != timeNow.mday) {
                     // Generate the file name with the current date and time.
-                    snprintf(fileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                    snprintf(fileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
                     // Open a new file for the data.
                     f = SD.open(fileName, FILE_WRITE, true);
                     oldDay = timeNow.mday;
