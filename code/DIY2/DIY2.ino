@@ -4,33 +4,38 @@
 #include <avr/wdt.h>
 
 #include "SdFat.h"
-#include "RTClib.h" // https://github.com/adafruit/RTClib
+// YOU NEED TO UNCOMMENT LINE 10 IN THE config.h FILE FOR THIS LIBRARY
+#include "ds3231.h" // https://github.com/rodan/ds3231
 #include "SparkFun_MS5803_I2C.h" // https://github.com/sparkfun/SparkFun_MS5803-14BA_Breakout_Arduino_Library
 
 
 //** The following four config values will be used when no config file is found.
 //** If a config file is found, these values will be ignored.
+
 // The device will wait until this time to begin. Setting a value in the past 
 // will cause the device to start immediately.
-#define DEFAULT_START_TIME DateTime(2000, 1, 1, 0, 0)
-// Length of time to sample for.
+// TODO: Fix this
+ //#define DEFAULT_START_TIME DateTime(2000, 1, 1, 0, 0)
+// Length of time to sample for before sleeping. Must be <= 1440. This value is
+// ignored if DEFAULT_SLEEP_DURATION is 0
 #define DEFAULT_SAMPLING_DURATION 60
 // Length of time to sleep after sampling for the above duration. Set to 0 for 
-// continuous sampling.
+// continuous sampling. Must be <= 1440
 #define DEFAULT_SLEEP_DURATION 0
 // Specify a name for the sensor to use when creating logging files.
 #define DEFAULT_SENSOR_NAME "MS2"
+// Maximum number of characters for sensor name.
 #define SENSOR_NAME_SIZE 10
 
-// The sensor name is combined with the suffix to create the output file name
-// during logging.
-#define OUTPUT_FILE_NAME_SUFFIX "_YYYYMMDD-hhmm.data"
-// Path to configuration file on SD card if one exists
+// NAME_YYYYMMDD-hhmm.data is the format.
+#define FILE_NAME_FORMAT "%s_%04d%02d%02d-%02d%02d.data"
+// The format specifiers take up more room than the formatted string will, so we 
+// subtract the extra space from the size. Then add room for %s part.
+#define FILE_NAME_SIZE (sizeof(FILE_NAME_FORMAT) - 11 + SENSOR_NAME_SIZE)
+
 #define CONFIG_FILE_NAME "config.txt"
 // Default number of samples to take per second (NOT IMPLEMENTED)
 //#define SAMPLES_PER_SECOND 1
-// Number of decimal places to keep for the pressure readings.
-#define PRECISION 2
 
 // Set to 1 to have info appear on the Serial Monitor when plugged into a 
 // computer. Disable during deployment, (set to 0) in order to save battery.
@@ -55,23 +60,28 @@ typedef struct {
     int8_t temperature;
 } __attribute__((packed)) entry_t;
 
-// Real Time Clock object.
-RTC_DS3231 rtc;
+// Used for storing time data from RTC.
+ts now;
+// Flags for setting RTC alarm so the alarm will look for a match in the hours, 
+// minutes, and seconds values.
+const uint8_t rtcFlags[] = {0, 0, 0, 1, 0};
+
 // Used for writing data to the current day's log file on the SD card.
 SdFat sd;
 SdFile logFile;
 // Pressure sensor object.
 MS5803 sensor(ADDRESS_LOW);
 
-DateTime now;
 // Track the current day value to determine when a new day begins and when a new
 // CSV file must be started.
 uint8_t oldDay = 0;
 
-char filename[SENSOR_NAME_SIZE + sizeof(OUTPUT_FILE_NAME_SUFFIX)];;
+// Name of the current log file.
+char filename[FILE_NAME_SIZE];
 
 // These values will be obtained from the config.txt file on the SD card if it
-// exists. Otherwise, the corresponding default values will be used.
+// exists. Otherwise, the corresponding default values will be used. See the
+// default value definitions above for the meaning of each.
 uint16_t samplingDuration = DEFAULT_SAMPLING_DURATION;
 uint16_t sleepDuration = DEFAULT_SLEEP_DURATION;
 char sensorName[SENSOR_NAME_SIZE + 1] = DEFAULT_SENSOR_NAME;
@@ -106,29 +116,24 @@ void setup() {
   ACSR = _BV(ACD); // Analog comparator.
   wdt_disable(); // Also disable the watchdog timer.
 
-  // Test connection with the RTC. If it fails, then the error LED will blink
-  // once per second until the device is restarted.
-  if (!rtc.begin()) {
-#if ECHO_TO_SERIAL
-    Serial.println(F("RTC setup error"));
-#endif
-    error(1);
-  }
+  // Initialize connection with RTC. 
+  // TODO: If it fails, then the error LED will blink once per second until the
+  // device is restarted.
+  Wire.begin();
+  DS3231_init(DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
   // If the RTC lost power and therefore lost track of time, it will light up 
   // the LED for 1 second. While it is not necessary that the RTC has the right
   // time, if multiple sensors are being deployed and are meant to start at the
   // same time, this will warn the user that the sensors are not synchronized.
-  if (rtc.lostPower()) {
+  if (DS3231_get_sreg() & DS3231_STATUS_OSF) {
 #if ECHO_TO_SERIAL
     Serial.println(F("RTC time not configured (lost power)"));
 #endif
     warning(500, 1);
   }
-  // These features should be disabled initially to save power.
-  rtc.disable32K(); // 32KHz clock
-  rtc.writeSqwPinMode(DS3231_OFF); // Square wave output
-  rtc.clearAlarm(1); 
-  rtc.disableAlarm(2);
+  // Alarms should be disabled initially.
+  DS3231_clear_a1f();
+  DS3231_clear_a2f();
 
   // Test connection with the SD. If it fails, then the error LED will blink 
   // twice per second until the device is restarted.
@@ -159,8 +164,6 @@ void setup() {
 
   // Used for reading data from the config file, if present.
   SdFile configFile;
-  // The sensor will sleep until this minute value.
-  DateTime startTime = DEFAULT_START_TIME;
   // Open the config file if it exists to obtain the start minute, data
   // sampling duration, sleep duration, and info string.
   if (configFile.open(CONFIG_FILE_NAME, O_READ)) {
@@ -238,7 +241,8 @@ void setup() {
 
     if (validityFlag == 0b01111111) {
       // Set these values based on the corresponding config values.
-      startTime = DateTime(dateTime[0], dateTime[1], dateTime[2], dateTime[3], dateTime[4]); // 1st line in file.
+      // TODO: Fix startTime
+      // startTime = DateTime(dateTime[0], dateTime[1], dateTime[2], dateTime[3], dateTime[4]); // 1st line in file.
       samplingDuration = configVars[0]; // 2nd line in file.
       sleepDuration = configVars[1]; // 3rd line in file.
     } else {
@@ -255,8 +259,8 @@ void setup() {
   }
 
 #if ECHO_TO_SERIAL
-  Serial.print(F("startTime = "));
-  Serial.print(startTime.year());
+  Serial.print(F("startTime = \n"));
+  /*Serial.print(startTime.year());
   Serial.print("-");
   Serial.print(startTime.month());
   Serial.print("-");
@@ -264,7 +268,7 @@ void setup() {
   Serial.print(F(" @ "));
   Serial.print(startTime.hour());
   Serial.print(F(":"));
-  Serial.println(startTime.minute());
+  Serial.println(startTime.minute());*/
   Serial.print(F("samplingDuration = "));
   Serial.println(samplingDuration);
   Serial.print(F("sleepDuration = "));
@@ -273,6 +277,7 @@ void setup() {
   Serial.println(sensorName);
 #endif
   
+  /*
   now = rtc.now();
 
   // If a startMinute value between 0 and 59 is set, the device will go into 
@@ -285,6 +290,7 @@ void setup() {
 #endif
     deepSleep(startTime, DS3231_A1_Minute);
   }
+  */
 
 #if ECHO_TO_SERIAL
   Serial.println(F("\nSetup complete, beginning sampling"));
@@ -308,21 +314,25 @@ void setup() {
  * the DS3231 in order to wake up after a duration specified by sleepDuration.
  */
 void loop() {
-  now = rtc.now();
+  // Get the current time from the RTC and store it in the variable "now".
+  DS3231_get(&now);
 
   // Start a new CSV file each day.
-  if (oldDay != now.day()) {
-    strcpy(filename, sensorName);
-    strcat(filename, OUTPUT_FILE_NAME_SUFFIX);
+  if (oldDay != now.mday) {
 
+    // Generate the file name based on the provided sensor name and the 
+    // current time.
+    snprintf(filename, FILE_NAME_SIZE, FILE_NAME_FORMAT, sensorName, now.year, now.mon, now.mday, now.hour, now.min, now.sec);
+
+    // Set the timestamp on the old log file (if one was open).
     if (logFile.isOpen()) {
-      logFile.timestamp(T_WRITE, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
+      logFile.timestamp(T_WRITE, now.year, now.mon, now.mday, now.hour, now.min, now.sec);
       logFile.close();
     } 
-    
-    // If there was an error creating the new log, the device will stop and 
+
+    // If there is an error creating the new file, the device will stop and 
     // blink three times per second until being restarted.
-    if (!logFile.open(now.toString(filename), O_WRITE | O_CREAT | O_AT_END)) {
+    if (!logFile.open(filename, O_WRITE | O_CREAT | O_AT_END)) {
 #if ECHO_TO_SERIAL
       Serial.println(F("Couldn't create file."));
 #endif
@@ -333,34 +343,35 @@ void loop() {
     Serial.println(filename);
     Serial.flush();
 #endif
-    oldDay = now.day();
+    oldDay = now.mday;
   }
+  
 
   // If active, the device will see whether it's time to take a sample.
   // Otherwise, enter deep sleep.
   if (active) {
     if (sampling) {
       entry_t data = {
-          .timestamp = now.secondstime(),
+          .timestamp = now.unixtime,
           .pressure = sensor.getPressure(ADC_4096),
-          .temperature = sensor.getTemperature(CELSIUS, ADC_512)
+          .temperature = (int8_t) sensor.getTemperature(CELSIUS, ADC_512)
       };
           
       logFile.write(&data, sizeof(data));
       logFile.sync();
       
 #if ECHO_TO_SERIAL
-      Serial.print(now.year());
+      Serial.print(now.year);
       Serial.print(F("-"));
-      Serial.print(now.month());
+      Serial.print(now.mon);
       Serial.print(F("-"));
-      Serial.print(now.day());
+      Serial.print(now.mday);
       Serial.print(F(" @ "));
-      Serial.print(now.hour());
+      Serial.print(now.hour);
       Serial.print(F(":"));
-      Serial.print(now.minute());
+      Serial.print(now.min);
       Serial.print(F(":"));
-      Serial.print(now.second());
+      Serial.print(now.sec);
       Serial.print(F(", "));
       Serial.print(data.pressure);
       Serial.print(F(", "));
@@ -369,7 +380,7 @@ void loop() {
 #endif //ECHO_TO_SERIAL
 
 #if ECHO_TO_PLOT
-      Serial.println(pressure);
+      Serial.println(data.pressure);
       Serial.flush();
 #endif //ECHO_TO_PLOT
       
@@ -383,7 +394,7 @@ void loop() {
     logFile.close();
 
     // Enter deep sleep for the specified sleepDuration.
-    deepSleep(rtc.now() + TimeSpan(0, 0, sleepDuration, 0), DS3231_A1_Minute);
+    deepSleep(sleepDuration);
 
     logFile.open(filename, O_WRITE | O_AT_END);
     // This will allow the main loop to execute the sampling code.
@@ -391,12 +402,6 @@ void loop() {
     sampling = true;
     // Prepare to resume sampling.
     enableTimer();
-    // Set an interrupt and alarm to stop sampling after the time specified by
-    // samplingDuration has passed. If sleepDuration is 0, no interrupt is set.
-    if (sleepDuration) {
-      attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
-      rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, samplingDuration, 0), DS3231_A1_Minute);
-   }
   }
 }
 
@@ -404,17 +409,24 @@ void loop() {
 
 /*
  * Puts the device to sleep until being awakened by the RTC's alarm, which
- * should pull pin D2 low and trigger an interrupt. Arguments will be passed to
- * (and are the same as) rtc.setAlarm1. This sleep mode saves more power than
- * lightSleep
+ * should pull pin D2 low and trigger an interrupt. "minutes" is the time in
+ * minutes to sleep for. It must be less than one day.
  */
-void deepSleep(const DateTime wakeTime, Ds3231Alarm1Mode alarm_mode) {
+void deepSleep(uint16_t minutes) {
 #if ECHO_TO_SERIAL
   Serial.println(F("Entering deep sleep"));
   Serial.flush();
 #endif
-  // When the alarm goes off, it will cause the SQW pin of the DS3231 to go low.
-  rtc.setAlarm1(wakeTime, alarm_mode);
+
+  // Get the current time.
+  DS3231_get(&now);
+  // Calculate the time after the specified number of minutes and set the alarm.
+  // When the alarm activates, it will cause the SQW pin of the DS3231 to go 
+  // low.
+  DS3231_set_a1(now.sec, (now.min + minutes) % 60, (now.hour + (now.min + minutes) / 60) % 24, 0, rtcFlags);
+  // Enable the alarm.
+  DS3231_set_creg(DS3231_get_creg() | DS3231_CONTROL_A1IE);
+
   set_sleep_mode(SLEEP_MODE_PWR_DOWN); // Saves the most power.
   // Disable interrupts while preparing to sleep. Without doing this, the
   // interrupt could go off before the sleep_cpu() command and leave the device
@@ -431,9 +443,11 @@ void deepSleep(const DateTime wakeTime, Ds3231Alarm1Mode alarm_mode) {
   sleep_cpu(); // Enter sleep.
 
   // When the device wakes up, it will resume here after executing the 
-  // deepSleepISR.
+  // deepSleepISR function.
 
-  rtc.clearAlarm(1);
+  // Clear the alarm and disable it for now.
+  DS3231_set_creg(DS3231_get_creg() & ~DS3231_CONTROL_A1IE);
+  DS3231_clear_a1f();
 #if ECHO_TO_SERIAL
   Serial.println(F("Exiting deep sleep"));
   Serial.flush();
@@ -458,7 +472,7 @@ void deepSleepISR() {
  */
 void enableTimer() {
   // Begin the clock on the DS3231, which should be connected to pin TOSC1/XTAL1.
-  rtc.enable32K();
+  DS3231_set_32kHz_output(true);
 
   // Switching to an asynchronous clock source as described in section 18.9 
   // (Asynchronous Operation of Timer/Counter2) of the datasheet:
@@ -485,8 +499,14 @@ void enableTimer() {
   // Set an interrupt and alarm to stop sampling after the time specified by
   // samplingDuration has passed. If sleepDuration is 0, no interrupt is set.
   if (sleepDuration) {
+    // Get the current time.
+    DS3231_get(&now);
+    // Attach the interrupt that will trigger when the alarm activates.
     attachInterrupt(INTERRUPT_INTPIN, stopSamplingISR, LOW);
-    rtc.setAlarm1(rtc.now() + TimeSpan(0, 0, samplingDuration, 0), DS3231_A1_Minute);
+    // Set the alarm.
+    DS3231_set_a1(now.sec, (now.min + samplingDuration) % 60, (now.hour + (now.min + samplingDuration) / 60) % 24, 0, rtcFlags);
+    // Enable the alarm.
+    DS3231_set_creg(DS3231_get_creg() | DS3231_CONTROL_A1IE);
   }
 }
 
@@ -511,8 +531,11 @@ void stopSamplingISR() {
 
 void disableTimer() {
   TIMSK2 = 0; // Disable Timer/Counter2 interrupts.
-  rtc.disable32K();
-  rtc.clearAlarm(1);
+  DS3231_set_32kHz_output(false); // Disable RTC 32khz
+  // Disable the alarm on the RTC.
+  DS3231_set_creg(DS3231_get_creg() & ~DS3231_CONTROL_A2IE);
+  // Clear the alarm on the RTC
+  DS3231_clear_a1f();
 }
 
 
