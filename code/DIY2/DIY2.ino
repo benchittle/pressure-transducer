@@ -24,7 +24,7 @@
 
 // The sensor name is combined with the suffix to create the output file name
 // during logging.
-#define OUTPUT_FILE_NAME_SUFFIX "_YYYYMMDD-hhmm.csv"
+#define OUTPUT_FILE_NAME_SUFFIX "_YYYYMMDD-hhmm.data"
 // Path to configuration file on SD card if one exists
 #define CONFIG_FILE_NAME "config.txt"
 // Default number of samples to take per second (NOT IMPLEMENTED)
@@ -34,7 +34,7 @@
 
 // Set to 1 to have info appear on the Serial Monitor when plugged into a 
 // computer. Disable during deployment, (set to 0) in order to save battery.
-#define ECHO_TO_SERIAL 0
+#define ECHO_TO_SERIAL 1
 #define ECHO_TO_PLOT 0
 
 // This pin is used for detecting an alarm from the RTC and triggering an
@@ -48,6 +48,12 @@
 #define ERROR_LED_PIN 4
 
 // =============================================================================
+
+typedef struct {
+    uint32_t timestamp;
+    float pressure;
+    int8_t temperature;
+} __attribute__((packed)) entry_t;
 
 // Real Time Clock object.
 RTC_DS3231 rtc;
@@ -322,14 +328,6 @@ void loop() {
 #endif
       error(3);
     }
-    // Print a header for the file.
-    logFile.write("samplingDuration,sleepDuration,sensorName\n");
-    logFile.printField(samplingDuration, ',');
-    logFile.printField(sleepDuration, ',');
-    logFile.write(sensorName);
-    logFile.write("\ndatetime,pressure,temperature\n");
-    logFile.timestamp(T_CREATE | T_WRITE, now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
-    logFile.sync();
 #if ECHO_TO_SERIAL
     Serial.print(F("Starting new file: ")); 
     Serial.println(filename);
@@ -342,17 +340,13 @@ void loop() {
   // Otherwise, enter deep sleep.
   if (active) {
     if (sampling) {
-      float pressure = sensor.getPressure(ADC_4096);
-      int temperature = sensor.getTemperature(CELSIUS, ADC_512); 
+      entry_t data = {
+          .timestamp = now.secondstime(),
+          .pressure = sensor.getPressure(ADC_4096),
+          .temperature = sensor.getTemperature(CELSIUS, ADC_512)
+      };
           
-      logFile.printField(now.year(), '-');
-      logFile.printField(now.month(), '-');
-      logFile.printField(now.day(), ' ');
-      logFile.printField(now.hour(), ':');
-      logFile.printField(now.minute(), ':');
-      logFile.printField(now.second(), ',');
-      logFile.printField(pressure, ',', PRECISION);
-      logFile.printField(temperature, '\n');
+      logFile.write(&data, sizeof(data));
       logFile.sync();
       
 #if ECHO_TO_SERIAL
@@ -368,9 +362,9 @@ void loop() {
       Serial.print(F(":"));
       Serial.print(now.second());
       Serial.print(F(", "));
-      Serial.print(pressure);
+      Serial.print(data.pressure);
       Serial.print(F(", "));
-      Serial.println(temperature);
+      Serial.println(data.temperature);
       Serial.flush();
 #endif //ECHO_TO_SERIAL
 
