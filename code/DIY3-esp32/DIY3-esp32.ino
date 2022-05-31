@@ -11,7 +11,7 @@
 
 //#include "hulp.h"
 
-#define ECHO_TO_SERIAL 1
+#define ECHO_TO_SERIAL 0
 
 #define SD_CS_PIN GPIO_NUM_13 // TODO: Change this pin: FireBeetle uses it for LED
 #define RTC_POWER_PIN GPIO_NUM_26
@@ -25,7 +25,7 @@
 
 // Number of readings we can store in a buffer before we run out of RTC memory
 // and need to dump to the SD card.
-#define BUFFER_SIZE 800
+#define BUFFER_SIZE 400
 
 // A custom struct to store a single data entry.
 // NOTE: __attribute__((packed)) tells the compiler not to add additional 
@@ -222,6 +222,7 @@ void setup() {
                     Serial.flush();
                 #endif
 
+                // TODO: Write buffered data before starting new day
                 // Open a file for logging the data. If it's the first dump of
                 // the day, start a new file.
                 File f;
@@ -248,6 +249,7 @@ void setup() {
                 // to use this data later, we'll have to unpack it using a 
                 // postprocessing script.
                 size_t written = f.write((uint8_t*) buffer, bufferCount * sizeof(entry_t));
+                
                 f.close();
                 SD.end();
                 #if ECHO_TO_SERIAL
