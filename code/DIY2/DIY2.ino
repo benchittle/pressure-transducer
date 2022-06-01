@@ -6,7 +6,7 @@
 #include "SdFat.h"
 // YOU NEED TO UNCOMMENT LINE 10 IN THE config.h FILE FOR THIS LIBRARY
 #include "ds3231.h" // https://github.com/rodan/ds3231
-#include "SparkFun_MS5803_I2C.h" // https://github.com/sparkfun/SparkFun_MS5803-14BA_Breakout_Arduino_Library
+#include "MS5803_14.h" // https://github.com/benchittle/MS5803_14 a fork of Luke Miller's repo: https://github.com/millerlp/MS5803_14
 
 
 //** The following four config values will be used when no config file is found.
@@ -69,8 +69,9 @@ const uint8_t rtcFlags[] = {0, 0, 0, 1, 0};
 // Used for writing data to the current day's log file on the SD card.
 SdFat sd;
 SdFile logFile;
+uint8_t writes = 0;
 // Pressure sensor object.
-MS5803 sensor(ADDRESS_LOW);
+MS_5803 sensor(4096);
 
 // Track the current day value to determine when a new day begins and when a new
 // CSV file must be started.
@@ -144,20 +145,24 @@ void setup() {
         error(2);
     }
 
-    // Initialize the MS5803 pressure sensor.
-    sensor.reset();
-    sensor.begin();
+    // Initialize the MS5803-14 pressure sensor.
+    if (!sensor.initializeMS_5803(false)) {
+        #if ECHO_TO_SERIAL
+            Serial.println(F("MS5803-14 sensor setup error"));
+            Serial.flush();
+        #endif
+    }
 
     // Take a sample pressure reading and make sure it's reasonable.
-    float testPressure = sensor.getPressure(ADC_4096);
-    if (testPressure < 0 || testPressure > 4000) {
+    sensor.readSensor();
+    if (sensor.pressure() < 0 || sensor.pressure() > 4000) {
         #if ECHO_TO_SERIAL
             Serial.println(F("MS5803 error"));
         #endif
         error(4);
-    } else if (testPressure > 1000) {
+    } else if (sensor.pressure() > 1100) {
         #if ECHO_TO_SERIAL
-            Serial.println(F("Pressure > 1400"));
+            Serial.println(F("Pressure > 1100"));
         #endif
         warning(250, 4);
     }
@@ -351,14 +356,26 @@ void loop() {
     // Otherwise, enter deep sleep.
     if (active) {
         if (sampling) {
+            // Tell the sensor to take a reading.
+            sensor.readSensor();
+            // Store the sensor data in a new entry.
             entry_t data = {
                 .timestamp = now.unixtime,
-                .pressure = sensor.getPressure(ADC_4096),
-                .temperature = (int8_t) sensor.getTemperature(CELSIUS, ADC_512)
+                .pressure = sensor.pressure(),
+                .temperature = (int8_t) sensor.temperature()
             };
             
+            // Write data to the SD card. The library maintains a 512 byte 
+            // buffer, which it only actually transfers to the card when full
+            // or when the files is closed / synced. This means that up to 512
+            // bytes (56 entries) of the most recent data could be lost when the
+            // sensor is powered off.
             logFile.write(&data, sizeof(data));
-            logFile.sync();
+            writes++;
+            if (writes >= 512 / sizeof(entry_t)) {
+                logFile.sync();
+                writes = 0;
+            }
             
             #if ECHO_TO_SERIAL
                 Serial.print(now.year);
