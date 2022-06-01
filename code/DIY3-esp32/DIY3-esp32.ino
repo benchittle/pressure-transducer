@@ -16,6 +16,7 @@
 #define SD_CS_PIN GPIO_NUM_13 // TODO: Change this pin: FireBeetle uses it for LED
 #define RTC_POWER_PIN GPIO_NUM_26
 #define RTC_ALARM GPIO_NUM_25
+#define ERROR_LED D9
 
 // /NAME_YYYYMMDD-hhmm.data is the format.
 #define FILE_NAME_FORMAT "/%7s_%04d%02d%02d-%02d%02d.data"
@@ -25,7 +26,7 @@
 
 // Number of readings we can store in a buffer before we run out of RTC memory
 // and need to dump to the SD card.
-#define BUFFER_SIZE 400
+#define BUFFER_SIZE 120
 
 // A custom struct to store a single data entry.
 // NOTE: __attribute__((packed)) tells the compiler not to add additional 
@@ -53,6 +54,37 @@ RTC_DATA_ATTR uint8_t oldDay = 0;
 RTC_DATA_ATTR entry_t buffer[BUFFER_SIZE];
 RTC_DATA_ATTR uint16_t bufferCount = 0;
 
+/*
+ * Enter an endless loop while flashing the error LED a given number of times
+ * each second.
+ */
+void error(uint8_t flashes) {
+    uint16_t duration = 1000 / flashes;
+    while (1) {
+        for (uint8_t i = 0; i < flashes; i++) {
+            digitalWrite(ERROR_LED, HIGH);
+            delay(duration);
+            digitalWrite(ERROR_LED, LOW);
+            delay(duration);
+        }
+        delay(1000);
+    }
+}
+
+
+/*
+ * Flash the error LED to warn the user.
+ */
+void warning(uint16_t duration, uint8_t flashes) {
+    for (uint8_t i = 0; i < flashes; i++) {
+        digitalWrite(ERROR_LED, HIGH);
+        delay(duration);
+        digitalWrite(ERROR_LED, LOW);
+        delay(duration);
+    }
+    delay(500);
+}
+
 void setup() {
     #if ECHO_TO_SERIAL
         Serial.begin(115200);
@@ -65,6 +97,7 @@ void setup() {
     pinMode(SD_CS_PIN, OUTPUT);
     pinMode(RTC_POWER_PIN, OUTPUT);
     pinMode(RTC_ALARM, INPUT_PULLUP);
+    pinMode(ERROR_LED, OUTPUT);
 
     switch (esp_reset_reason()) {   
 
@@ -110,12 +143,14 @@ void setup() {
                     Serial.println(F("SD setup error"));
                     Serial.flush();
                 #endif
+                error(2);
             }
 
             // Get device's name from SD card or use default.
             File config = SD.open("/config.txt", FILE_READ, false);
             if (!config) {
                 strcpy(deviceName, "DIY3-XX");
+                warning(500, 3);
             } else {
                 config.read((uint8_t*) deviceName, sizeof(deviceName) - 1);
                 config.close();
@@ -131,7 +166,7 @@ void setup() {
                 #if ECHO_TO_SERIAL
                     Serial.println("Failed to create first file...");
                 #endif
-                break; // switch
+                error(2);
             }
             f.close();
             SD.end();
@@ -143,6 +178,7 @@ void setup() {
                     Serial.println(F("MS5803-05 sensor setup error"));
                     Serial.flush();
                 #endif
+                error(3);
             }
             
             // Disable power to the DS3231's VCC.
@@ -152,6 +188,8 @@ void setup() {
                 Serial.println("Going to sleep...");
                 Serial.flush();
             #endif
+
+            warning(3000, 1);
 
              // Make the ESP32 wake up when the alarm goes off (i.e. goes low). 
             esp_sleep_enable_ext0_wakeup(RTC_ALARM, 0);
@@ -241,7 +279,7 @@ void setup() {
                         Serial.println("Failed to open file");
                         Serial.flush();
                     #endif
-                    break; // switch
+                    error(4);
                 }
                 // Write the data buffer as a sequence of bytes (it's vital that
                 // the entry_t struct is packed, otherwise there will be garbage
@@ -284,6 +322,7 @@ void setup() {
     #if ECHO_TO_SERIAL
         Serial.println("CONTROL EXIT");
     #endif
+    error(5);
 }
 
 void loop() {}
