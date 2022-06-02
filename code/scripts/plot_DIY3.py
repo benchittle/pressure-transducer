@@ -1,10 +1,9 @@
-# %%
 import pandas as pd
 from datetime import datetime
 import os
 from matplotlib import pyplot
 
-INPATH = "/home/benc/Documents/DIY3_out/C401-E15D"
+INPATH = "/home/benc/Documents/DIY3_out/test run 1"
 
 allData = {}
 
@@ -16,24 +15,29 @@ def read_diy3(path, sensorID):
         parse_dates=True
     )
     data.rename(columns={"pressure" : sensorID + "_P", "temperature" : sensorID + "_T"}, inplace=True)
+    
     return data
 
+# For reading RBR's raw engineering output.
 def read_rbr(path, sensorID):
     # Read data and rename columns, using timestamp as the index.
-    data = pd.read_excel(
-        io=path,
-        skiprows=5, 
+    data = pd.read_table(
+        filepath_or_buffer=path,
+        sep="    ",
+        skiprows=31, 
         usecols=[0, 1, 2], # Select Timestamp, Pressure, and Temperature
-        names=["timestamp", sensorID + "_T", sensorID + "_P", ]) # Rename columns
+        names=["timestamp", sensorID + "_T", sensorID + "_P", ], # Rename columns
+        encoding="ISO-8859-1", # Default runs into some characters it can't parse
+        engine="python"
+        ) 
     # Convert time datetime objects
-    data["timestamp"] = pd.to_datetime(data["timestamp"], dayfirst=True)
+    data["timestamp"] = pd.to_datetime(data["timestamp"], format="%d-%b-%Y %H:%M:%S.000")
     data.set_index("timestamp", inplace=True)
     # Convert pressure to mbar
     data[sensorID + "_P"] *= 100 
 
     return data
 
-# %%
 for f in os.listdir(INPATH):
     name, ext = os.path.splitext(f)
     # Read DIY3 data
@@ -42,7 +46,7 @@ for f in os.listdir(INPATH):
         #timestamp = datetime.strptime(timestamp, r"%Y%m%d-%H%M")
         data = read_diy3(INPATH + "/" + f, sensorID)
     # Read RBR data
-    elif ext == ".xls":
+    elif ext == ".txt":
         sensorID = "RBR"
         data = read_rbr(INPATH + "/" + f, sensorID)
     else:
@@ -61,21 +65,5 @@ allData = {sensor : pd.concat(allData[sensor]) for sensor in allData}
 allData = pd.concat(allData.values(), axis=1).sort_index()
 allData = allData.reindex(sorted(allData.columns), axis=1)
 allData[[c for c in allData.columns if c.endswith("_P")]].plot()
-#pyplot.show()
+pyplot.show()
 
-# %%
-#temp = allData.copy()
-#temp["RBR_P"] = temp["RBR_P"].fillna(method="ffill")
-#temp[[c for c in temp.columns if c.endswith("_P")]].plot(rot=45)
-#allData.to_csv(f"{INPATH}/sampleData.csv")
-for c in allData.columns:
-    if c.endswith("_P"):
-        allData[c].plot()
-        print(c)
-        pyplot.show()
-
-
-
-
-
-# %%
