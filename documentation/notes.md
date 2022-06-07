@@ -14,9 +14,27 @@ The sensor will be prepared and assembled within the housing before travelling t
 ---
 ---
 
+# 6 June 2022
+
+## First deployment
+These notes are mainly focused on the development and electronics of the sensors, but I think their application is worth going over briefly. The transducers are far from a final product, but the deadline for the first deployment has come and passed and several sensors are now in the field, at 1m depths in various lakes just offshore. (The scrambling to test and finish the sensors beforehand has left a lot of undocumented work!) Several DIY3 sensors were paired up with the old MS2 / DIY2 sensors for redundancy as we deployed them. To keep the sensors underwater, we acquired cement deck blocks from the MS2 / DIY2 project and zip tied the sensors to the blocks with 2 big loops all the way around. Time will tell if it will be strong enough to hold, but I think there are other issues to consider, too. 
+
+The sensor housing, which is the same as MS2 / DIY2, has not been tested for more than a day underwater (at least, not by me). Mostly I wouldn't expect any issues: if there was a gap in the epoxy or PVC cement, we would know pretty quickly. However, the gripper cap could be very prone to human error. Since the sensors were only turned on right before they were deployed, we couldn't put all the caps on beforehand, and instead we had to twist each one on in the field. This is easy enough to do, but I can't say for certain whether each cap was twisted on with equal force, or whether they will remain water tight for a month.
+
+Additionally, the DIY3 battery life still hasn't been properly tested, which is why we paired several of the sensors with old MS2 / DIY2 ones. I had started a prototype with some early code back in early to mid May and left it running, and it lasted for around 2 weeks before the voltage began to drop below 3.3V, but the batteries may have been used / old and the code was not as optimized as the "final" version in this deployment.
+
+Finally, the MS5803-05 being exposed (just the sensor port, obviously not the electronics which are covered in an epoxy) may degrade it over time.
+
+## SD card issues
+Once again, the SD cards need to be addressed. After looking through some overnight test data from the sensors, I've noticed that several of them have chunks of data missing from the SD card periodically. Not missing in a corrupted way, but missing as though it just wasn't saved. These chunks of data just so happen to be the same size as the buffer. This leads me to believe that the logger itself is functioning fine, but something is going wrong when it tries to save to the SD card. I still have yet to figure out the cause with certainty, but my guess is that the quick spikes in current draw that happen during save events might be too much for the FireBeetle and/or the batteries to handle. I tried solving this by lowering the buffer size to reduce the amount of data being written and adding a 10uF capacitor to each microSD module, and it seemed to alleviate the problem a bit, but there are still chunks missing every now and then. I suppose adding more capacitors in parallel would fix the problem if it is what I think it is, but otherwise I'm not sure what a cleaner solution would look like.
+
+## Power Consumption Revisited
+With the sensors going into the field, I wanted to estimate their battery life. Since I don't have the proper equipment to accurately log current draw at a high resolution, I made some very rough estimates with a multimeter. By noting the running time of the program and the current being read by my multimeter when the sensor was active vs sleeping, I ended up with an estimated average current draw of 3mA (at 10MHz processor speed). The sleep current of the sensor is <1mA (0.5mA was measured on one of the sensors, so I'll use that figure), and the active current spikes are typically around 30mA, although some are much higher. While running at 10MHz, the sensor usually takes ~90000us (90ms) to complete a cycle of the program and go back to sleep. In other words, the sensor is awake for 9% of every second, which can be generalized to just being awake for 9% of the time and asleep for the other 91%. This allows us to calculate the average current as `(9% * 3mA + 91% * 0.7mA) / 100% = 3.3mA`.
+
+
 # 23 May 2022
 
-# Solution to Problem with the DS3231 Module
+## Solution to Problem with the DS3231 Module
 After several days of tinkering with the module and some code (most of which was spent forgetting that binary numbers must be prefixed with 0b...), I've come to a workaround for the problems mentioned previously. 
 
 Firstly, I removed most of the components from the DS3231 module, including the troublesome resistor blocks. Since pull up resistors are still needed for I2C, I added some to the ESP32 shield instead. Now that the pull up resistors are independent of the module, I can even communicate with the DS3231 when it's on battery backup power (though I2C may drain the coin cell faster), and I don't need to turn on the DS3231 to read from the MS5803-05. The other components (the EEPROM and its resistor block) were removed from the module simply because I don't use them, and I don't want them wasting energy.
@@ -26,7 +44,7 @@ Secondly, I switched from Adafruit's [RTClib](https://github.com/adafruit/RTClib
 
 # 13 May 2022
 
-# Problem with the DS3231 Module
+## Problem with the DS3231 Module
 I've been trying to generate alarms using the DS3231 module in order to wake up the ESP32. Most libraries make this easy when the chip is powered (VCC is powered, that is), but a certain control register bit must be set in order for this to work only on battery power. However, even after setting this bit, I haven't been able to generate alarms or a squarewave once the DS3231's VCC power is set to low. 
 
 After looking around a bit, I came across a forum post that mentioned that the INT/SQW pin is actually connected to VCC via a resistor (see the [schematic](https://www.onetransistor.eu/2019/07/zs042-ds3231-battery-charging-circuit.html)). These resistor blocks, which are also the pull-up resistors for I2C in the design, are now becoming a bit of a headache rather than a conveniance. Currently, in order to communicate with either the DS3231 *or the MS5803-05*, the DS3231 module has to have power on its VCC, which I power via a GPIO pin. This is because I2C requires pull up resistors to work, and those pull up resistors are connected to the DS3231 module's VCC. However, having learned that the INT/SQW pin is also pulled up here (unnecessarily, since I can just use the INPUT_PULLUP mode of the ESP's GPIO pins), I've now realized that the module also must have VCC power when I want to use the alarms (i.e. always)! Otherwise, if VCC is not powered, the resistors become pull down resistors and overpower the ESP32's internal pull ups. And since the DS3231's alarm is active low, it will look like the alarm is always active. Not good.
@@ -34,10 +52,10 @@ After looking around a bit, I came across a forum post that mentioned that the I
 
 # 11 May 2022
 
-# Problem with ULP and I2C
+## Problem with ULP and I2C
 As I started looking into the issue of how to communicate to the MS5803-05 using the ULP and I2C, I ran into an immediate problem that I hadn't accounted for: the ULP uses different pins for I2C than the main processor. In fact, the ULP can't even interact with the default I2C pins since they aren't RTC GPIO pins. This is a problem, since I would have to further modify each sensor board by hand, soldering connections from the ULP accessible I2C pins to the default I2C pins, in order to make use of the ULP. It's doable, but adds more assembly time and room for human error. Plus, I'm not familiar enough with I2C to be confident that I can implement it on time in ULP assembly. So, for the time being, I'm going to put the ULP approach on the backburner and use the same approach as DIY2: wake up the main processor every second, read in a sample, and go back to sleep. A major improvement I can still make here is to buffer the data, and only save it to the microSD a few times a day.
 
-# Smaller microSD cards
+## Smaller microSD cards
 I ordered some [512MB cards](https://www.adafruit.com/product/5252) from Adafruit ([through DigiKey](https://www.digikey.ca/short/tnh7294f)). 512MB is plenty for this kind of data logging, assuming the data is stored efficiently (i.e. as binary data, which will need some post-processing to be readable). Although I haven't tested all the cards yet, they appear to draw significantly less current. Compared to the 32GB Sandisk card which drained >1mA while idle, the 512MB card was only drawing just under 0.4mA. While this is still a lot, it's a noteable improvment.
 
 If each reading takes a 4 byte timestamp, a 4 byte float (pressure), and a 1 byte int (temperature), then each reading will require 9 bytes. Assuming 400,000,000 Bytes of space (I want to account for any bad memory or packing that might go on under the hood), then the card will be able to store approximately `400,000,000 Bytes / 9 Bytes = 44,444,444 samples`. Assuming a sampling rate of 1Hz, then the sensor will have space to run for 514 days. If this isn't enough, then we can remove the timestamp from each reading and instead assume each reading is 1 second apart. This method would only require 5 bytes per reading, leaving room for 80,000,000 samples or 925 days of data at 1Hz.
@@ -45,7 +63,7 @@ If each reading takes a 4 byte timestamp, a 4 byte float (pressure), and a 1 byt
 
 # 10 May 2022
 
-# Working with the ESP32's ULP Coprocessor
+## Working with the ESP32's ULP Coprocessor
 (I'm just going to call it the ULP). The ULP is one of the main reasons why I considered the ESP32 despite how power hungry it could be. Based on what I read during my research, it seemed that the ULP couldn't be used for very complex tasks, but it could still interact with certain GPIO's, interact with certain memory (that was shared with the main processor), and communicate via I2C. This was perfect, because it would allow me to read from the MS5803 without even having to wake up the main processor! However, diving into the ULP has been quite a challenge so far.
 
 The first thing to figure out is how you're going to program it. If you're using the ESP's native framework, this isn't a problem and it's well documented by Espressif. However, if you're using the Arduino ESP framework (like me), then here's a list of what I've tried:
