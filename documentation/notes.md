@@ -14,6 +14,19 @@ The sensor will be prepared and assembled within the housing before travelling t
 ---
 ---
 
+
+# 8 June 2022
+
+## SD card alternatives
+SD cards have been the center of a number of issues in the data loggers so far. Their convenience and high capacity might not be worth all the trouble to find genuine cards, save power, and deal with the internal housekeeping events they so often need to perform. Additionally, the commercial data loggers I've seen don't seem to make use of any kind of removeable storage. Instead, I assume they include flash storage chips, or something similar. I've considered flash storage in the past, but the limited number of write / erase cycles deterred me (usually flash chips guarantee around 10000 to 100000 cycles). But after reconsidering it now, this would be plenty!
+
+The main downside to using flash chips, or at least the first one that comes to mind, is the capacity. Looking through DigiKey, the pickings are slim even just to match the 512MB SD card currently assigned to each logger. It's important to note that, at least on DigiKey, capacity is measured in K*b* or M*b* (bits), not K*B* and M*B* (bytes). So to find a similar capcity flash chip to the 512MB SD card, we need a `512Mb * 8 = 4Gb` flash module. Most of these higher capacity flash modules require large pinouts (48 pins), would be difficult to solder since they're surface mount, and can be expensive. [This](https://www.digikey.ca/short/9fm84vzd) 2Gb chip could work, especially if I can optimize the data that needs to be stored, but perhaps it's worth reconsidering how much capacity is actually needed. Again, commercial loggers, such as the RBR TWR logger that I use to calibrate these loggers, don't have a massive capacity for storing data. Instead, it records data only at scheduled intervals and can store averages instead of raw data. The scheduling features were implemented in MS2's code, but we never made use of them because we had so much storage. 
+
+So, supposing I optimize space by storing timestamps less regularly, then even without scheduling / averaging there will be a major improvement. 4 bytes for pressure + 1 byte for temperature = 5 bytes per sample. If sampling at 1Hz, on [a 512Mb flash](https://www.digikey.ca/short/f2n3d91w), there will be room for approximately 500Mb / 8 bits = 62.5MB of data. So 62.5MB / 5B per sample = 12,500,000 samples. And finally, 12,500,000 samples / 86,400 samples per day = 182 days of data. Plenty!
+
+The next factor to consider is how to interface with the device. Both of the items above use SPI on the hardware side of things, but I'm not entirely sure what library to use to actually interact with the device. SPIFFS seems to be relevant, but I've never used it before and so I'm probably missing some nuances. There also don't seem to be all that many community projects involving flash chips over SD cards, either.
+
+
 # 6 June 2022
 
 ## First deployment
