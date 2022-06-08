@@ -4,6 +4,12 @@
 
   (paper "A4")
 
+  (title_block
+    (title "DIY3 FireBeetle Shield")
+    (date "2022-06-08")
+    (rev "v2")
+  )
+
   (lib_symbols
     (symbol "Connector:Conn_01x04_Male" (pin_names (offset 1.016) hide) (in_bom yes) (on_board yes)
       (property "Reference" "J" (id 0) (at 0 5.08 0)
