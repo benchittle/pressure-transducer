@@ -18,11 +18,17 @@ The sensor will be prepared and assembled within the housing before travelling t
 # 8 June 2022
 
 ## SD card alternatives
-SD cards have been the center of a number of issues in the data loggers so far. Their convenience and high capacity might not be worth all the trouble to find genuine cards, save power, and deal with the internal housekeeping events they so often need to perform. Additionally, the commercial data loggers I've seen don't seem to make use of any kind of removeable storage. Instead, I assume they include flash storage chips, or something similar. I've considered flash storage in the past, but the limited number of write / erase cycles deterred me (usually flash chips guarantee around 10000 to 100000 cycles). But after reconsidering it now, this would be plenty!
+SD cards have been the center of a number of issues in the data loggers so far. Their convenience and high capacity might not be worth all the trouble to find genuine cards and save power. Additionally, the commercial data loggers I've seem don't seem to make use of any kind of removeable storage. Instead, I assume they include flash storage chips, or something similar. I've considered flash storage in the past, but the limited number of write / erase cycles deterred me (usually flash chips guarantee around 10000 to 100000 cycles). But after reconsidering it now, realistically this would be plenty!
 
 The main downside to using flash chips, or at least the first one that comes to mind, is the capacity. Looking through DigiKey, the pickings are slim even just to match the 512MB SD card currently assigned to each logger. It's important to note that, at least on DigiKey, capacity is measured in K*b* or M*b* (bits), not K*B* and M*B* (bytes). So to find a similar capcity flash chip to the 512MB SD card, we need a `512Mb * 8 = 4Gb` flash module. Most of these higher capacity flash modules require large pinouts (48 pins), would be difficult to solder since they're surface mount, and can be expensive. [This](https://www.digikey.ca/short/9fm84vzd) 2Gb chip could work, especially if I can optimize the data that needs to be stored, but perhaps it's worth reconsidering how much capacity is actually needed. Again, commercial loggers, such as the RBR TWR logger that I use to calibrate these loggers, don't have a massive capacity for storing data. Instead, it records data only at scheduled intervals and can store averages instead of raw data. The scheduling features were implemented in MS2's code, but we never made use of them because we had so much storage. 
 
-So, supposing I optimize space by storing timestamps less regularly, then even without scheduling / averaging there will be a major improvement. 4 bytes for pressure + 1 byte for temperature = 5 bytes per sample. If sampling at 1Hz, on [a 512Mb flash](https://www.digikey.ca/short/f2n3d91w), there will be room for approximately 500Mb / 8 bits = 62.5MB of data. So 62.5MB / 5B per sample = 12,500,000 samples. And finally, 12,500,000 samples / 86,400 samples per day = 182 days of data. Plenty!
+So, supposing I optimize space by storing timestamps less regularly (i.e. only store a timestamp at the beginning of each hour and assume every sample is a second apart), then even without scheduling / averaging there will be a major improvement. 4 bytes for pressure + 1 byte for temperature = 5 bytes per sample. If sampling at 1Hz, on [a 512Mb flash](https://www.digikey.ca/short/f2n3d91w), there will be room for approximately  
+`500Mb / 8 bits = 62.5MB`  
+of data. So  
+`62.5MB / 5B per sample = 12,500,000 samples`.  
+And finally,  
+`12,500,000 samples / 86,400 samples per day = 182 days`  
+of data. Plenty!
 
 The next factor to consider is how to interface with the device. Both of the items above use SPI on the hardware side of things, but I'm not entirely sure what library to use to actually interact with the device. SPIFFS seems to be relevant, but I've never used it before and so I'm probably missing some nuances. There also don't seem to be all that many community projects involving flash chips over SD cards, either.
 
@@ -30,7 +36,7 @@ The next factor to consider is how to interface with the device. Both of the ite
 # 6 June 2022
 
 ## First deployment
-These notes are mainly focused on the development and electronics of the sensors, but I think their application is worth going over briefly. The transducers are far from a final product, but the deadline for the first deployment has come and passed and several sensors are now in the field, at 1m depths in various lakes just offshore. (The scrambling to test and finish the sensors beforehand has left a lot of undocumented work!) Several DIY3 sensors were paired up with the old MS2 / DIY2 sensors for redundancy as we deployed them. To keep the sensors underwater, we acquired cement deck blocks from the MS2 / DIY2 project and zip tied the sensors to the blocks with 2 big loops all the way around. Time will tell if it will be strong enough to hold, but I think there are other issues to consider, too. 
+These notes are mainly focused on the development and electronics of the sensors, but I think their application is worth going over briefly. The transducers are far from a final product, but the deadline for the first deployment has come and passed and several sensors are now in the field, at 1m depths in various lakes in Muskoka, Ontario just offshore. (The scrambling to test and finish the sensors beforehand has left a lot of undocumented work!) Several DIY3 sensors were paired up with the old MS2 / DIY2 sensors for redundancy as we deployed them. To keep the sensors underwater, we acquired cement deck blocks from the MS2 / DIY2 project and zip tied the sensors to the blocks with 2 big loops all the way around. Time will tell if it will be strong enough to hold, but I think there are other issues to consider, too. 
 
 The sensor housing, which is the same as MS2 / DIY2, has not been tested for more than a day underwater (at least, not by me). Mostly I wouldn't expect any issues: if there was a gap in the epoxy or PVC cement, we would know pretty quickly. However, the gripper cap could be very prone to human error. Since the sensors were only turned on right before they were deployed, we couldn't put all the caps on beforehand, and instead we had to twist each one on in the field. This is easy enough to do, but I can't say for certain whether each cap was twisted on with equal force, or whether they will remain water tight for a month.
 
@@ -42,7 +48,7 @@ Finally, the MS5803-05 being exposed (just the sensor port, obviously not the el
 Once again, the SD cards need to be addressed. After looking through some overnight test data from the sensors, I've noticed that several of them have chunks of data missing from the SD card periodically. Not missing in a corrupted way, but missing as though it just wasn't saved. These chunks of data just so happen to be the same size as the buffer. This leads me to believe that the logger itself is functioning fine, but something is going wrong when it tries to save to the SD card. I still have yet to figure out the cause with certainty, but my guess is that the quick spikes in current draw that happen during save events might be too much for the FireBeetle and/or the batteries to handle. I tried solving this by lowering the buffer size to reduce the amount of data being written and adding a 10uF capacitor to each microSD module, and it seemed to alleviate the problem a bit, but there are still chunks missing every now and then. I suppose adding more capacitors in parallel would fix the problem if it is what I think it is, but otherwise I'm not sure what a cleaner solution would look like.
 
 ## Power Consumption Revisited
-With the sensors going into the field, I wanted to estimate their battery life. Since I don't have the proper equipment to accurately log current draw at a high resolution, I made some very rough estimates with a multimeter. By noting the running time of the program and the current being read by my multimeter when the sensor was active vs sleeping, I ended up with an estimated average current draw of 3mA (at 10MHz processor speed). The sleep current of the sensor is <1mA (0.5mA was measured on one of the sensors, so I'll use that figure), and the active current spikes are typically around 30mA, although some are much higher. While running at 10MHz, the sensor usually takes ~90000us (90ms) to complete a cycle of the program and go back to sleep. In other words, the sensor is awake for 9% of every second, which can be generalized to just being awake for 9% of the time and asleep for the other 91%. This allows us to calculate the average current as `(9% * 3mA + 91% * 0.7mA) / 100% = 3.3mA`.
+With the sensors going into the field, I wanted to estimate their battery life. Since I don't have the proper equipment to accurately log current draw at a high resolution, I made some very rough estimates with a multimeter. By noting the running time of the program and the current being read by my multimeter when the sensor was active vs sleeping, I ended up with an estimated average current draw of 3mA (at 10MHz processor speed). The sleep current of the sensor is <1mA (0.5mA was measured on one of the sensors, so I'll use that figure), and the active current spikes are typically around 30mA, although some are much higher. While running at 10MHz, the sensor usually takes ~90000us (90ms) to complete a cycle of the program and go back to sleep. In other words, the sensor is awake for 9% of every second, which can be generalized to just being awake for 9% of the time and asleep for the other 91%. This allows us to calculate the average current as `(9% * 3mA + 91% * 0.7mA) / 100% = 3.3mA`. Of course, there could be spikes that my multimeter misses or other factors I haven't considered, but I'm hoping to verify this result in the future by seeing how long the sensors run for during deployment. 
 
 
 # 23 May 2022
@@ -71,7 +77,9 @@ As I started looking into the issue of how to communicate to the MS5803-05 using
 ## Smaller microSD cards
 I ordered some [512MB cards](https://www.adafruit.com/product/5252) from Adafruit ([through DigiKey](https://www.digikey.ca/short/tnh7294f)). 512MB is plenty for this kind of data logging, assuming the data is stored efficiently (i.e. as binary data, which will need some post-processing to be readable). Although I haven't tested all the cards yet, they appear to draw significantly less current. Compared to the 32GB Sandisk card which drained >1mA while idle, the 512MB card was only drawing just under 0.4mA. While this is still a lot, it's a noteable improvment.
 
-If each reading takes a 4 byte timestamp, a 4 byte float (pressure), and a 1 byte int (temperature), then each reading will require 9 bytes. Assuming 400,000,000 Bytes of space (I want to account for any bad memory or packing that might go on under the hood), then the card will be able to store approximately `400,000,000 Bytes / 9 Bytes = 44,444,444 samples`. Assuming a sampling rate of 1Hz, then the sensor will have space to run for 514 days. If this isn't enough, then we can remove the timestamp from each reading and instead assume each reading is 1 second apart. This method would only require 5 bytes per reading, leaving room for 80,000,000 samples or 925 days of data at 1Hz.
+If each reading takes a 4 byte timestamp, a 4 byte float (pressure), and a 1 byte int (temperature), then each reading will require 9 bytes. Assuming 400,000,000 Bytes of space (I want to account for any bad memory or packing that might go on under the hood), then the card will be able to store approximately  
+`400,000,000 Bytes / 9 Bytes per sample = 44,444,444 samples`  
+Assuming a sampling rate of 1Hz, then the sensor will have space to run for 514 days. If this isn't enough, then we can remove the timestamp from each reading and instead assume each reading is 1 second apart. This method would only require 5 bytes per reading, leaving room for 80,000,000 samples or 925 days of data at 1Hz.
 
 
 # 10 May 2022
@@ -92,7 +100,7 @@ In DIY2's design, I created a connector for the MS5803-14 using Dupont connector
 
 So as an alternative for this project, I wanted to use JST connectors. They seemed like a good fit since the MS5803-05 wouldn't have to be unplugged from the board very often (JST connectors aren't technically meant for applications where there's a lot of plugging in and unplugging). I included a footprint for the 4-pin PH variant (there's [a lot](https://en.wikipedia.org/wiki/JST_connector) of JST connectors) and then proceeded to buy precrimped wires for the *SH* variant... which used 2.54mm pin spacing instead of the 2mm *PH* footprint on my board. 
 
-Since the 2mm variant is less common, I couldn't find long enough precrimped wires for my design, so I had to order a kit of various JST PH connectors and a pair of Engineer Crimpers off Amazon to crimp my own (make sure you have wire strippers too, and that your wire is the right AWG for the type of JST connector). I found crimping to be much less frustrating than soldering wires to male Dupont header pins, and the end product was a clean and foolproof connector for the MS5803-05 wires.
+Since the 2mm variant is less common, I couldn't find long enough precrimped wires for my design, so I had to order a kit of various JST PH connectors and a pair of Engineer Crimpers off Amazon to crimp my own (make sure you have wire strippers too, and that your wire is the right AWG for the type of JST connector). I found crimping to be much less frustrating than soldering wires to male Dupont header pins, and the end product was a clean and foolproof connector for the MS5803-05 wires. It certainly would have been faster to find precrimped wires, but crimping your own is not an unrealistic approach either.
 
 
 # 6 May 2022
@@ -135,7 +143,7 @@ The custom PCB has been designed, ordered, and received. I used JLCPCB as the bo
 After reading up on the Cave Pearl Project's notes on [saving power with microSD cards](https://thecavepearlproject.org/2017/05/21/switching-off-sd-cards-for-low-power-data-logging/), I realized that I underestimated the power consumption of the microSD card and DS3231. Using some DeepSleep example code from the ESP32 framework for Arduino, and after cutting [a connection on the board itself](https://wiki.dfrobot.com/FireBeetle_Board_ESP32_E_SKU_DFR0654#target_4) (see the "Low Power" pad), I was able to get the FireBeetle's current consumption down to ~10 uA as expected. However, just adding the RTC module and microSD card to the circuit bumped the current consumption up to between 0.4 mA and 1.2 mA depending on the microSD card. I'm thinking about dealing with this the same way the Cave Pearl Project did: pin power the RTC module and use a transistor (a BJT) as a switch to toggle the power to the microSD during sleep. Unfortunately, that means I'll have to do some janky soldering on the custom PCB, which I'll have to redesign in the future.
 
 
-# 14 Apr 2022
+# 14 April 2022
 
 ## Getting ready to order the parts
 There's a lot of scattered thinking involved when ordering parts for something you haven't fully thought out and tested. The main aspects of the sensor are the same as with DIY2: MS5803-05B pressure transducer (we used an MS5803-14BA for DIY2 but the hardware footprint is identical between all the models), DS3231SN (or DS3231M) RTC breakout, microSD breakout. However, since the parts won't be assembled on a breadboard, I have to think about how I'll be wiring things together. 
@@ -150,13 +158,13 @@ The first thought that came to my head when starting this idea was to attach a m
 
 So no PCB? Well a PCB might still be useful. The microSD and DS3231 breakout boards are inexpensive (somehow I can buy 4 DS3231SN or M breakout boards on ebay for the price of one DS3231SN chip on Digikey...) and already assembled, that's why we chose them as opposed to making our own PCB with the same components. However, as I mentioned in the above section, the components must now be wired together somehow, rather than connected easily via traces in a PCB. Unless... I just create a shield with a few easy to solder through-hole connectors for the MS5803 cable, DS3231 module, and microSD module that handles all the "wiring" for me. Bingo!
 
-# 05-03-2022
+# 3 March 2022
 
 ## Change of Plans
 This batch of sensors no longer needs to be wired: instead it will once again be battery powered and save data (most likely) to an SD card, essentially the same as DIY2. At this point, an Arduino nano or pro mini could likely be used instead of a handmade board like DIY2 or the FireBeetle. However, I'd like to continue testing.
 
 
-# 01-03-2022
+# 1 March 2022
 
 ## Software for Programming an ESP32
 There is support for ESP32 programming in the Arduino IDE, but I'd like to have the Intellisense perks that come with an editor like VS Code. I have both the Arduino extension and PlatformIO (PIO) extension set up now. I'm thinking it will be best if I begin programming under the Arduino framework (either using the extension directly or under PIO) since I'm familiar with it, and once I have the functionality I want, I may convert to Espressif's framework for the ESP32 (still under PIO) if there are any major benefits for doing so.
@@ -167,26 +175,26 @@ I'll be ordering 2 or 3 FireBeetle boards, 3 or 4 MAX3485 chips (with boards to 
 
 
 
-# 26-02-2022
+# 26 February 2022
 
 ## Long Range Data Transmission cont.
 - Power loss is another factor that needs to be considered here: there will be a voltage drop at each sensor, which could become problematic if the cable is too long. This is because the cable I currently intend to use (ethernet cable of some kind) has very small gauge copper wire, which is less effective for power transmission.
 - An additional transceiver component will be needed to use RS-485 communication. There are some very cheap breakout boards available on Amazon and other places that work at 5V, but I'm intending for this project to work at 3(.3)V (maybe this should change?) considering the ESP32 chip requires a voltage in this range. Sparkfun sells a [board](https://www.sparkfun.com/products/10124) that works at 3.3V, but based on the price and the reviews I'd be better off using a chip like this [Maxim one](https://www.maximintegrated.com/en/products/interface/transceivers/MAX3485.html) ([DigiKey link](https://www.digikey.ca/en/products/detail/analog-devices-inc-maxim-integrated/MAX3485CSA-T/1703654)) with perhaps a custom PCB or a small bare breakout PCB for whatever package type the chip comes in. I'm going to investigate the cost of a custom PCB, with room for an ethernet port or other wire connector.
 
 
-# 25-02-2022
+# 25 February 2022
 
 ## Long Range Data Transmission
 Each sensor will be connected to the shore hub via a wired connection in order to receive power and transmit data. However, this distance will undoubtedly be longer than just a few meters, making communication protocols like I2C and SPI ineffective. If the sensors are to be underwater, Wi-Fi is (probably) not an option either. For this reason, a longer range wired communication protocol will be required, like [RS-485](https://www.omega.ca/en/resources/rs422-rs485-rs232), as well as a transceiever in order to use it. The cable used is also important: twirled pair cables (like in ethernet cables) reduce interference. The cable will need to be waterproof, which is supposedly best achieved by an outdoor rated gel filled cable.
 
     
-# 24-02-2022
+# 24 February 2022
 
 ## New Course of Action
 Although I would like to design my own PCB for a project at some point, I need to learn more about the ESP32 before I can do that for this project. After further research, the [FireBeetle](https://www.dfrobot.com/product-1590.html) ESP32 development board seems like a very good alternative to a self made board (which would essentially need the same features for this project). It boasts a deep sleep current of just 10 μA and will keep development time on track. 
 
   
-# 23-02-2022
+# 23 February 2022
 
 ## Plan of action
 I think I'll design a PCB using an ESP chip first, since power savings aren't an issue for the current use case. If the power consumption of the ESP chip can't be reduced enough, an STM32 design might be fleshed out in the future.
