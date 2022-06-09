@@ -5,7 +5,7 @@
 
 #include "SdFat.h"
 #include "RTClib.h" // https://github.com/adafruit/RTClib
-#include "MS5803_02.h"
+#include "MS5803_02.h" // https://github.com/millerlp/MS5803_02
 
 //** The following four config values will be used when no config file is found.
 //** If a config file is found, these values will be ignored.
