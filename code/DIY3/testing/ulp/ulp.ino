@@ -60,8 +60,35 @@ void init_ulp()
     };
 
     const ulp_insn_t program[] = {
+        
+        M_LABEL(1),
         I_MOVI(R2,0),
+        I_GPIO_OUTPUT_RD(LED_PIN),
+        I_BL(3, 1),
+        I_GPIO_OUTPUT_DIS(LED_PIN),
+        I_BGE(2, 0),
+        //M_BX(2),
+        I_GPIO_OUTPUT_EN(LED_PIN),
+        M_LABEL(2),
+        M_DELAY_MS_20_1000(1000),
+        M_BX(1),
+        
+       /*
+        M_LABEL(1),
+        I_GPIO_OUTPUT_RD(LED_PIN),
+        M_BL(2, 1),
+        I_GPIO_OUTPUT_DIS(LED_PIN),
+        M_BX(3),
+        M_LABEL(2),
+        I_GPIO_OUTPUT_EN(LED_PIN),
+        M_LABEL(3),
+        M_DELAY_MS_20_1000(500),
+        M_BX(1),
+    */
 
+
+
+        /*
     #ifdef SLAVE_READ8_SUBADDR
         M_I2CBB_RD(LBL_READ8_RETURN, LBL_I2C_READ_ENTRY, SLAVE_READ8_SUBADDR),
         I_PUT(R0, R2, ulp_data8),
@@ -95,14 +122,16 @@ void init_ulp()
             I_BXR(R3),
 
         M_INCLUDE_I2CBB(LBL_I2C_READ_ENTRY, LBL_I2C_WRITE_ENTRY, LBL_I2C_ARBLOST, LBL_I2C_NACK, SCL_PIN, SDA_PIN, SLAVE_ADDR),
+        */
 };
-
+    /*
     ESP_ERROR_CHECK(hulp_configure_pin(SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
     ESP_ERROR_CHECK(hulp_configure_pin(SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
 
     hulp_peripherals_on();
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
+    */
 
     ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), 1ULL * 1000 * 1000, 0));
     ESP_ERROR_CHECK(hulp_ulp_run(0));
@@ -112,12 +141,19 @@ void setup() {
     Serial.begin(115200);
     Serial.println("START");
 
+    pinMode(LED_PIN, OUTPUT);
+
+    /*
     Wire.begin();
     DS3231_init(DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
     creg = DS3231_get_creg();
 
     sensor.initializeMS_5803(false);
     sensor.readSensor();
+    */
+
+    hulp_configure_pin(LED_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1);
+    hulp_peripherals_on();
 
     init_ulp();
 }
