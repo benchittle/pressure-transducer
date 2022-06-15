@@ -5,6 +5,7 @@
 #include "hulp.h"
 #include "hulp_i2cbb.h"
 #include "ds3231.h"
+#include "MS5803_05.h"
 
 
 #define LED_PIN GPIO_NUM_15
@@ -13,23 +14,26 @@
 #define ULP_SCL GPIO_NUM_4
 
 
+// first send CMD_ADC_CONV + CMD_ADC_Dx + CMD_ADC_4096
+// then wait 10ms
+// then 
 
 
 
 #define SCL_PIN GPIO_NUM_14
 #define SDA_PIN GPIO_NUM_13
 
-#define SLAVE_ADDR DS3231_I2C_ADDR
+#define SLAVE_ADDR MS5803_I2C_ADDRESS
 
 // Set for 8-bit read:
- #define SLAVE_READ8_SUBADDR DS3231_CONTROL_ADDR
+ #define SLAVE_READ8_SUBADDR (CMD_ADC_CONV + CMD_ADC_D1 + CMD_ADC_4096)
 
 // Set for 16-bit read:
 // #define SLAVE_READ16_SUBADDR 0x0
 
 // Set subaddress and value for write:
-// #define SLAVE_WRITE_SUBADDR 0x0
-// #define SLAVE_WRITE_VALUE 0x0
+ //#define SLAVE_WRITE_SUBADDR CMD_RESET
+ //#define SLAVE_WRITE_VALUE CMD_RESET
 
 RTC_DATA_ATTR ulp_var_t ulp_data8;
 RTC_DATA_ATTR ulp_var_t ulp_data16;
@@ -37,6 +41,8 @@ RTC_DATA_ATTR ulp_var_t ulp_nacks;
 RTC_DATA_ATTR ulp_var_t ulp_buserrors;
 
 uint8_t creg = 0;
+
+MS_5803 sensor(4096);
 
 void init_ulp()
 {
@@ -89,7 +95,7 @@ void init_ulp()
             I_BXR(R3),
 
         M_INCLUDE_I2CBB(LBL_I2C_READ_ENTRY, LBL_I2C_WRITE_ENTRY, LBL_I2C_ARBLOST, LBL_I2C_NACK, SCL_PIN, SDA_PIN, SLAVE_ADDR),
-    };
+};
 
     ESP_ERROR_CHECK(hulp_configure_pin(SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
     ESP_ERROR_CHECK(hulp_configure_pin(SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
@@ -107,15 +113,17 @@ void setup() {
     Serial.println("START");
 
     Wire.begin();
-    DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
+    DS3231_init(DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
     creg = DS3231_get_creg();
+
+    sensor.initializeMS_5803(false);
+    sensor.readSensor();
 
     init_ulp();
 }
 
 void loop() {
-    // Wait for interrupt
     printf("Read8: %u, Read16: %u, NACK Errors: %u, Bus Errors: %u\n", ulp_data8.val, ulp_data16.val, ulp_nacks.val, ulp_buserrors.val);
-    printf("REG: %d\n", creg);
+    printf("D1: %x\tD2: %x\n", sensor.D1val(), sensor.D2val());
     delay(1000);
 }
