@@ -8,6 +8,7 @@
 #include "MS5803_05.h"
 
 
+
 #define LED_PIN GPIO_NUM_15
 
 #define ULP_SDA GPIO_NUM_0
@@ -22,6 +23,16 @@
 
 #define SCL_PIN GPIO_NUM_14
 #define SDA_PIN GPIO_NUM_13
+
+
+// TODO: Hi should be hi impedence (input), low should be driving low
+#define I_I2C_DATA_HI() I_GPIO_OUTPUT_EN(SDA_PIN)
+#define I_I2C_DATA_LO() I_GPIO_OUTPUT_DIS(SDA_PIN)
+
+#define I_I2C_CLOCK_HI() I_GPIO_OUTPUT_EN(SCL_PIN)
+#define I_I2C_CLOCK_LO() I_GPIO_OUTPUT_DIS(SCL_PIN)
+
+#define M_DELAY_1MS() M_DELAY_US_100_5000(1000)
 
 #define SLAVE_ADDR MS5803_I2C_ADDRESS
 
@@ -47,32 +58,95 @@ MS_5803 sensor(4096);
 void init_ulp()
 {
     enum {
-        LBL_READ8_RETURN,
-        LBL_READ16_RETURN,
-        LBL_WRITE_RETURN,
-
-        LBL_HALT,
-        
-        LBL_I2C_READ_ENTRY,
-        LBL_I2C_WRITE_ENTRY,
-        LBL_I2C_NACK,
-        LBL_I2C_ARBLOST,
+        SUB_I2C_WRITE_BIT,
+        SUB_I2C_READ_BIT,
+        SUB_I2C_INIT,
+        SUB_I2C_START,
+        SUB_I2C_STOP,
+        SUB_I2C_WRITE,
+        SUB_I2C_READ,
     };
 
+    // Note:
+    // R0 is used to pass an argument to a subroutine
+    // R2 is used to return values from subroutines
+    // R3 is used to store the return address for a subroutine
     const ulp_insn_t program[] = {
         
+        M_LABEL(SUB_I2C_WRITE_BIT),
+            I_BL(3, 1),     // skip next two instructions if R0 == 0
+            I_I2C_DATA_LO(),
+            I_BGE(2, 0),    // skip next instruction otherwise
+            I_I2C_DATA_HI(),
+
+            I_I2C_CLOCK_HI(),
+            M_DELAY_1MS(),
+
+            I_I2C_CLOCK_LO(),
+            M_DELAY_1MS(),
+
+            I_BL(2, 1),     // skip next instruction if R0 == 0
+            I_I2C_DATA_LO(),
+
+            M_DELAY_1MS(),
+        I_BXR(R3),
+
+
+        M_LABEL(SUB_I2C_READ_BIT),
+            I_I2C_DATA_HI(),
+
+            I_I2C_CLOCK_HI(),
+            M_DELAY_1MS(),
+
+
+        I_BXR(R3),
+
+
+        M_LABEL(SUB_I2C_INIT),
+
+        I_BXR(R3),
+
+
+        M_LABEL(SUB_I2C_START),
+
+        I_BXR(R3),
+
+
+        M_LABEL(SUB_I2C_STOP),
+
+        I_BXR(R3),
+
+
+        M_LABEL(SUB_I2C_WRITE),
+
+        I_BXR(R3),
+
+
+        M_LABEL(SUB_I2C_READ),
+
+        I_BXR(R3),
+        
+
+
+        //main code
+
+    //M_RETURN
+
+
+       /*
         M_LABEL(1),
         I_MOVI(R2,0),
         I_GPIO_OUTPUT_RD(LED_PIN),
-        I_BL(3, 1),
+        I_BL(3, 1),  // jumps to enable LED
         I_GPIO_OUTPUT_DIS(LED_PIN),
-        I_BGE(2, 0),
+        I_BGE(2, 0), // jumps out of if statement (to delay)
         //M_BX(2),
         I_GPIO_OUTPUT_EN(LED_PIN),
         M_LABEL(2),
         M_DELAY_MS_20_1000(1000),
         M_BX(1),
-        
+*/
+
        /*
         M_LABEL(1),
         I_GPIO_OUTPUT_RD(LED_PIN),
@@ -124,14 +198,14 @@ void init_ulp()
         M_INCLUDE_I2CBB(LBL_I2C_READ_ENTRY, LBL_I2C_WRITE_ENTRY, LBL_I2C_ARBLOST, LBL_I2C_NACK, SCL_PIN, SDA_PIN, SLAVE_ADDR),
         */
 };
-    /*
+    
     ESP_ERROR_CHECK(hulp_configure_pin(SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
     ESP_ERROR_CHECK(hulp_configure_pin(SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
 
     hulp_peripherals_on();
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
-    */
+    
 
     ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), 1ULL * 1000 * 1000, 0));
     ESP_ERROR_CHECK(hulp_ulp_run(0));
