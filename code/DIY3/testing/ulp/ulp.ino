@@ -8,11 +8,7 @@
 #include "MS5803_05.h"
 
 
-
-
-#define ULP_SDA GPIO_NUM_0
-#define ULP_SCL GPIO_NUM_4
-
+// ESP32 I2C monitoring connections
 #define ESP_SDA GPIO_NUM_21
 #define ESP_SCL GPIO_NUM_22
 
@@ -22,13 +18,12 @@
 // then 
 
 
-
-#define SCL_PIN GPIO_NUM_14
+// ULP I2C connections
+#define SCL_PIN GPIO_NUM_14 
 #define SDA_PIN GPIO_NUM_13
 
 #define LED_PIN SDA_PIN
 
-// TODO: Hi should be hi impedence (input), low should be driving low
 
 #define M_I2C_DATA_HI() I_GPIO_OUTPUT_DIS(SDA_PIN)
 #define M_I2C_DATA_LO() \
@@ -55,12 +50,27 @@
  //#define SLAVE_WRITE_SUBADDR CMD_RESET
  //#define SLAVE_WRITE_VALUE CMD_RESET
 
-RTC_DATA_ATTR ulp_var_t ulp_data8;
-RTC_DATA_ATTR ulp_var_t ulp_data16;
-RTC_DATA_ATTR ulp_var_t ulp_nacks;
-RTC_DATA_ATTR ulp_var_t ulp_buserrors;
-
 RTC_DATA_ATTR ulp_var_t ulp_var1;
+RTC_DATA_ATTR ulp_var_t ulp_var2;
+
+RTC_DATA_ATTR ulp_var_t ulp_read_cmd[HULP_I2C_CMD_BUF_SIZE(1)] = {
+    HULP_I2C_CMD_HDR(0b1101000, DS3231_CONTROL_ADDR, 1)
+};
+
+RTC_DATA_ATTR ulp_var_t ulp_write_cmd[] = {
+    HULP_I2C_CMD_HDR_NO_PTR(0b11010000, 1),
+    HULP_I2C_CMD_1B(DS3231_CONTROL_ADDR)
+};
+
+// addr: 1101000(0|1)
+// ctrl: 00001110
+// 92 = 01011100 
+
+
+uint8_t sdaVals[256];
+uint8_t count = 0;
+
+
 
 uint8_t creg = 0;
 uint8_t sdaVal, sclVal;
@@ -93,26 +103,54 @@ void init_ulp()
         L_RET12,
 
         L_LOOP00,
-        L_LOOP01
+        L_LOOP01,
+
+        L_READ,
+        L_WRITE,
+        L_W_RETURN,
+        L_R_RETURN,
 
     };
 
-    // Note:
-    // R0 is used to pass an argument to a subroutine
-    // R2 is used to return values from subroutines
-    // R3 is used to store the return address for a subroutine
+
     const ulp_insn_t program[] = {
-        // M_I2C_DELAY(),
+        M_I2C_DELAY(),
+
+       /* I_MOVO(R1, ulp_write_cmd),
+        M_MOVL(R3, L_W_RETURN),
+        M_BX(L_WRITE),
+        M_LABEL(L_W_RETURN),*/
+
+        I_MOVO(R1, ulp_read_cmd),
+        M_MOVL(R3, L_R_RETURN),
+        M_BX(L_READ),
+        M_LABEL(L_R_RETURN),
+
+        I_MOVI(R1, 0),
+        I_PUT(R0, R1, ulp_var1),
+
+        I_GET(R0, R1, ulp_read_cmd[HULP_I2C_CMD_DATA_OFFSET]),
+        I_PUT(R0, R1, ulp_var2),
+
 
         /*
-        I_MOVI(R0, 0),
-        I_MOVI(R1, 0),
-        I_MOVI(R2, 0b11111111),
-        I_LSHI(R1, R2, 1),
-        I_PUT(R1, R0, ulp_var1),
-        */
+        I_MOVO(R1, ulp_read_cmd),
+        M_MOVL(R3, L_RETURN),
+        M_BX(L_READ),
+        M_LABEL(L_RETURN),
 
-        M_I2C_DELAY(),
+        I_MOVI(R1, 0),
+        I_PUT(R0, R1, ulp_var1),*/
+
+
+
+        I_END(),
+        I_HALT(),
+
+        M_INCLUDE_I2CBB_CMD(L_READ, L_WRITE, SCL_PIN, SDA_PIN),
+
+        /*
+        
         
         // Send start condition
         M_RETURN(L_RET02, R3, SUB_I2C_START),
@@ -246,15 +284,7 @@ void init_ulp()
         M_LABEL(SUB_I2C_WRITE),
             // Copy argument into R2.
             I_MOVR(R2, R0),
-            /*
-            // We'll use the upper half of R2 as a counter. We can't use the 
-            // stage counter as it is already used by M_I2C_DELAY. 
-            // The counter will count down by left shifting R2 (which is also
-            // used to get the next bit to write) until the MSB is 0 (=7 loops).
-            // Then we will write one more bit before returning.
-            I_ANDI(R2, R2, 0b0000000011111111), // Reset upper byte
-            I_ORI(R2, R2, 0b1111111000000000), // Set first 7 bits to 1
-            */
+
             I_STAGE_RST(),
             // Loop start
             M_LABEL(L_LOOP00),
@@ -325,6 +355,8 @@ void init_ulp()
             
             M_I2C_DELAY(),
         I_BXR(R3),
+
+        */
         
 
 
@@ -354,47 +386,13 @@ void init_ulp()
         M_BX(1),
     */
 
-
-
-        /*
-    #ifdef SLAVE_READ8_SUBADDR
-        M_I2CBB_RD(LBL_READ8_RETURN, LBL_I2C_READ_ENTRY, SLAVE_READ8_SUBADDR),
-        I_PUT(R0, R2, ulp_data8),
-        I_WAKE(),
-    #endif
-
-    #ifdef SLAVE_READ16_SUBADDR
-        M_I2CBB_RD(LBL_READ16_RETURN, LBL_I2C_READ_ENTRY, SLAVE_READ16_SUBADDR),
-        I_PUT(R0, R2, ulp_data16),
-        I_WAKE(),
-    #endif
-
-    #ifdef SLAVE_WRITE_SUBADDR
-        M_I2CBB_WR(LBL_WRITE_RETURN, LBL_I2C_WRITE_ENTRY, SLAVE_WRITE_SUBADDR, SLAVE_WRITE_VALUE),
-    #endif
-
-        I_HALT(),
-
-        M_LABEL(LBL_I2C_NACK),
-            I_GET(R0, R2, ulp_nacks),
-            I_ADDI(R0,R0,1),
-            I_PUT(R0,R2, ulp_nacks),
-            I_WAKE(),
-            I_BXR(R3),
-
-        M_LABEL(LBL_I2C_ARBLOST),
-            I_GET(R0, R2, ulp_buserrors),
-            I_ADDI(R0,R0,1),
-            I_PUT(R0,R2, ulp_buserrors),
-            I_WAKE(),
-            I_BXR(R3),
-
-        M_INCLUDE_I2CBB(LBL_I2C_READ_ENTRY, LBL_I2C_WRITE_ENTRY, LBL_I2C_ARBLOST, LBL_I2C_NACK, SCL_PIN, SDA_PIN, SLAVE_ADDR),
-        */
     };
     
-    ESP_ERROR_CHECK(hulp_configure_pin(SCL_PIN, RTC_GPIO_MODE_INPUT_OUTPUT, GPIO_FLOATING, 0));
-    ESP_ERROR_CHECK(hulp_configure_pin(SDA_PIN, RTC_GPIO_MODE_INPUT_OUTPUT, GPIO_FLOATING, 0));
+    //ESP_ERROR_CHECK(hulp_configure_pin(SCL_PIN, RTC_GPIO_MODE_INPUT_OUTPUT, GPIO_FLOATING, 0));
+    //ESP_ERROR_CHECK(hulp_configure_pin(SDA_PIN, RTC_GPIO_MODE_INPUT_OUTPUT, GPIO_FLOATING, 0));
+
+    ESP_ERROR_CHECK(hulp_configure_pin(SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
+    ESP_ERROR_CHECK(hulp_configure_pin(SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));   
 
     hulp_peripherals_on();
 
@@ -425,6 +423,7 @@ void setup() {
     pinMode(ESP_SDA, INPUT);
     pinMode(ESP_SCL, INPUT);
     
+    
     Wire.begin();
     DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
     creg = DS3231_get_creg();
@@ -432,32 +431,56 @@ void setup() {
     
 
     init_ulp();
-    delay(5000);
+    //delay(1500);
 
     
-    //while (!digitalRead(ESP_SCL) || !digitalRead(ESP_SDA));
+    while (!digitalRead(ESP_SCL) || !digitalRead(ESP_SDA));
     //delay(250);
+    monitor();
+    for (int i = 0; i < count && i < sizeof(sdaVals); i++) {
+        printf("(%d) SDA: %d\n", i, sdaVals[i]);
+    }
 }
 
 
 
 void loop() {
-    printf("var1: %d\ncreg: %d\n\n", ulp_var1.val, DS3231_get_creg());
+    
+    printf("var1: %d \tvar2: %x \tcreg: %x\n\n", ulp_var1.val, ulp_var2.val, DS3231_get_creg());
     delay(1000);
     
-    /*
-    uint8_t flag = 0;
-    sdaVal = digitalRead(ESP_SDA);
-    sclVal = digitalRead(ESP_SCL);
     
-    printf("SDA: %d \tSCL: %d \tulp: %x\n", sdaVal, sclVal, ulp_var1.val & 0xFF);
+    
+    
+    
+}
 
-    while(digitalRead(ESP_SCL)) {
-        if (sdaVal && !digitalRead(ESP_SDA) && !flag) {
-            printf("START COND\n\n");
-            flag = 1;
+void monitor() {
+    while (1) {
+        uint8_t flag = 0;
+        //sdaVal = digitalRead(ESP_SDA);
+        //sclVal = digitalRead(ESP_SCL);
+        
+        //printf("SDA: %d \tSCL: %d \tulp: %x\n", sdaVal, sclVal, ulp_var1.val & 0xFF);
+        sdaVals[count] = digitalRead(ESP_SDA);
+        count++;
+        time_t t1 = millis();
+        while(digitalRead(ESP_SCL)) {
+            if (millis() - t1 > 2000) {
+                return;
+            }
+            if (sdaVal && !digitalRead(ESP_SDA) && !flag) {
+                //printf("START COND\n\n");
+                sdaVals[count] = 2;
+                count++;
+                flag = 1;
+            }
+        }
+        t1 = millis();
+        while(!digitalRead(ESP_SCL)) {
+            if (millis() - t1 > 2000) {
+                return;
+            }
         }
     }
-    while(!digitalRead(ESP_SCL));
-    */
 }
