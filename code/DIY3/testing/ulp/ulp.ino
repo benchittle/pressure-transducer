@@ -41,7 +41,7 @@
     I_GPIO_SET(SCL_PIN, 0)
 
 
-#define M_I2C_DELAY() M_DELAY_MS_20_1000(500)
+#define M_I2C_DELAY() M_DELAY_US_100_5000(1000)
 
 #define SLAVE_ADDR MS5803_I2C_ADDRESS
 
@@ -115,14 +115,14 @@ void init_ulp()
         M_RETURN(L_RET02, R3, SUB_I2C_START),
 
         // Send address of DS3231 and write bit
-        I_MOVI(R0, 11010000),
+        I_MOVI(R0, 0b11010000),
         M_RETURN(L_RET03, R3, SUB_I2C_WRITE),
 
         // Read for the acknowledge bit
         M_RETURN(L_RET04, R3, SUB_I2C_READ_BIT),
         I_MOVI(R1, 0),
         I_PUT(R2, R1, ulp_var1),
-        /*
+        
         // Send write address for DS3231
         I_MOVI(R0, DS3231_CONTROL_ADDR),
         M_RETURN(L_RET05, R3, SUB_I2C_WRITE),
@@ -139,7 +139,7 @@ void init_ulp()
 
         // Send stop condition
         M_RETURN(L_RET09, R3, SUB_I2C_STOP),
-        */
+        
         I_END(),
         I_HALT(),
 
@@ -150,10 +150,10 @@ void init_ulp()
         //           R3 contains return address
         M_LABEL(SUB_I2C_WRITE_BIT),
             I_BL(3, 1),     // skip next two instructions if R0 == 0
-            M_I2C_DATA_LO(),
-            I_BGE(2, 0),    // skip next instruction otherwise
             M_I2C_DATA_HI(),
-
+            I_BGE(2, 0),    // skip next instruction otherwise
+            M_I2C_DATA_LO(),
+            
             M_I2C_CLOCK_HI(),
             M_I2C_DELAY(),
 
@@ -228,16 +228,20 @@ void init_ulp()
         M_LABEL(SUB_I2C_WRITE),
             // Copy argument into R2.
             I_MOVR(R2, R0),
-            // Reset the stage counter (loop counter) USED BY DELAY FN.
-            I_STAGE_RST(),
+            // We'll use the upper half of R2 as a counter. We can't use the 
+            // stage counter as it is already used by M_I2C_DELAY. 
+            // The counter will count down by left shifting R2 (which is also
+            // used to get the next bit to write) until the MSB is 0. Then we 
+            // will write one more bit before returning.
+            I_ANDI(R2, R2, 0b0000000011111111),
+            I_ORI(R2, R2, 0b1111111000000000),
 
             // Loop start
             M_LABEL(L_LOOP00),
 
             
-            // Move MSB of R2 to R0 and shift R2 left
+            // Move MSB of lower byte in R2 to R0 and shift R2 left. 
             I_ANDI(R0, R2, 0b10000000),
-            //I_RSHI(R0, R0, 7),
             I_LSHI(R2, R2, 1),
 
             I_MOVI(R1, 0),
@@ -250,11 +254,22 @@ void init_ulp()
             // Put return address back into R3
             I_MOVR(R3, R1),
 
-            // Repeat loop 8 times total (1 byte)
-            I_STAGE_INC(1),
-            //M_BX(L_LOOP00),
-            M_BSLE(L_LOOP00, 251),
-        I_BXR(R3),
+            // Repeat the loop 7 times.
+            I_ANDI(R0, R2, 0b1000000000000000),
+            M_BGE(L_LOOP00, 1),
+
+            // Get the last bit to write.
+            I_ANDI(R0, R2, 0b10000000),
+
+            I_MOVI(R1, 0),
+            I_PUT(R0, R1, ulp_var1),
+
+            // Enter WRITE_BIT subroutine. Rather than saving the return address
+            // and returning to this function, we'll give it the return address
+            // of this function and return directly to the caller.
+            M_BX(SUB_I2C_WRITE_BIT),
+
+        // I_BXR(R3), // We never actually reach this instruction
 
 
         // Read a byte from I2C slave.
@@ -389,24 +404,26 @@ void setup() {
 
     pinMode(ESP_SDA, INPUT);
     pinMode(ESP_SCL, INPUT);
-
-    init_ulp();
-    //delay(10000);
-/*
+    
     Wire.begin();
-    //DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
+    DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
     creg = DS3231_get_creg();
     printf("start var1: %d\nstart creg: %d\n\n", ulp_var1.val, creg);
-    */
-    while (!digitalRead(ESP_SCL) || !digitalRead(ESP_SDA));
+
+    init_ulp();
+    delay(5000);
+
+    
+    //while (!digitalRead(ESP_SCL) || !digitalRead(ESP_SDA));
     //delay(250);
 }
 
 
 
 void loop() {
-    //printf("var1: %d\ncreg: %d\n\n", ulp_var1.val, DS3231_get_creg());
-    //delay(1000);
+    printf("var1: %d\ncreg: %d\n\n", ulp_var1.val, DS3231_get_creg());
+    delay(1000);
+    /*
     uint8_t flag = 0;
     sdaVal = digitalRead(ESP_SDA);
     sclVal = digitalRead(ESP_SCL);
@@ -419,5 +436,5 @@ void loop() {
             flag = 1;
         }
     }
-    while(!digitalRead(ESP_SCL));
+    while(!digitalRead(ESP_SCL));*/
 }
