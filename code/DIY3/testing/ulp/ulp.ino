@@ -54,12 +54,12 @@ RTC_DATA_ATTR ulp_var_t ulp_var1;
 RTC_DATA_ATTR ulp_var_t ulp_var2;
 
 RTC_DATA_ATTR ulp_var_t ulp_read_cmd[HULP_I2C_CMD_BUF_SIZE(2)] = {
-    HULP_I2C_CMD_HDR(DS3231_I2C_ADDR, DS3231_CONTROL_ADDR, 1)
+    HULP_I2C_CMD_HDR_NO_PTR(MS5803_I2C_ADDRESS, 2)
 };
 
 RTC_DATA_ATTR ulp_var_t ulp_write_cmd[] = {
-    HULP_I2C_CMD_HDR(DS3231_I2C_ADDR, DS3231_CONTROL_ADDR, 1),
-    HULP_I2C_CMD_1B(DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN)
+    HULP_I2C_CMD_HDR(MS5803_I2C_ADDRESS, 0b10100100, 0),
+    //HULP_I2C_CMD_1B(0b10100000)
 };
 
 // addr: 1101000(0|1)
@@ -75,6 +75,18 @@ uint8_t count = 0;
 uint8_t creg = 0;
 uint8_t sdaVal, sclVal;
 
+
+// addr: 0x77 = 0b1110111
+/*
+C0 = 0
+C1 = 26325
+C2 = 22307
+C3 = 32375
+C4 = 14479
+C5 = 32716
+C6 = 28642
+C7 = 6
+*/
 MS_5803 sensor(4096);
 
 void init_ulp()
@@ -90,23 +102,18 @@ void init_ulp()
     const ulp_insn_t program[] = {
         M_I2C_DELAY(),
 
+        
         I_MOVO(R1, ulp_write_cmd),
         M_MOVL(R3, L_W_RETURN),
         M_BX(L_WRITE),
         M_LABEL(L_W_RETURN),
+        
 
-        /*
+
         I_MOVO(R1, ulp_read_cmd),
         M_MOVL(R3, L_R_RETURN),
         M_BX(L_READ),
         M_LABEL(L_R_RETURN),
-        */
-
-        I_MOVI(R1, 0),
-        I_PUT(R0, R1, ulp_var1),
-
-        I_GET(R0, R1, ulp_read_cmd[HULP_I2C_CMD_DATA_OFFSET]),
-        I_PUT(R0, R1, ulp_var2),
 
 
         I_END(),
@@ -133,17 +140,13 @@ void init_ulp()
 
 void setup() {
     Serial.begin(115200);
+    delay(500);
     Serial.println("START");
 
     ulp_var1.val = 0;
 
     //pinMode(LED_PIN, OUTPUT);
-
     
-    /*
-    sensor.initializeMS_5803(false);
-    sensor.readSensor();
-    */
 
     //hulp_configure_pin(LED_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1);
     hulp_peripherals_on();
@@ -152,10 +155,13 @@ void setup() {
     pinMode(ESP_SCL, INPUT);
     
     
-    Wire.begin();
-    DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
-    creg = DS3231_get_creg();
-    printf("start var1: %d\nstart creg: %x\n\n", ulp_var1.reg_off, creg);
+    //Wire.begin();
+    //DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
+    //creg = DS3231_get_creg();
+    //printf("start var1: %d\nstart creg: %x\n\n", ulp_var1.reg_off, creg);
+
+    sensor.initializeMS_5803(true);
+
     
 
     init_ulp();
@@ -174,12 +180,8 @@ void setup() {
 
 void loop() {
     
-    printf("var1: %d \tvar2: %x \tcreg: %x\n\n", ulp_var1.val, ulp_var2.val, DS3231_get_creg());
-    delay(1000);
-    
-    
-    
-    
+    printf("c0: %d \tc1: %d\n\n", ulp_read_cmd[HULP_I2C_CMD_DATA_OFFSET].val, ulp_read_cmd[HULP_I2C_CMD_DATA_OFFSET + 1].val);
+    delay(1000);   
     
 }
 
@@ -194,7 +196,7 @@ void monitor() {
         count++;
         time_t t1 = millis();
         while(digitalRead(ESP_SCL)) {
-            if (millis() - t1 > 2000) {
+            if (millis() - t1 > 4000) {
                 return;
             }
             if (sdaVal && !digitalRead(ESP_SDA) && !flag) {
@@ -206,7 +208,7 @@ void monitor() {
         }
         t1 = millis();
         while(!digitalRead(ESP_SCL)) {
-            if (millis() - t1 > 2000) {
+            if (millis() - t1 > 4000) {
                 return;
             }
         }
