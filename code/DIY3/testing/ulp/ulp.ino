@@ -41,7 +41,7 @@
     I_GPIO_SET(SCL_PIN, 0)
 
 
-#define M_I2C_DELAY() M_DELAY_US_100_5000(1000)
+#define M_I2C_DELAY() M_DELAY_US_100_5000(5000)
 
 #define SLAVE_ADDR MS5803_I2C_ADDRESS
 
@@ -88,6 +88,9 @@ void init_ulp()
         L_RET07,
         L_RET08,
         L_RET09,
+        L_RET10,
+        L_RET11,
+        L_RET12,
 
         L_LOOP00,
         L_LOOP01
@@ -114,14 +117,12 @@ void init_ulp()
         // Send start condition
         M_RETURN(L_RET02, R3, SUB_I2C_START),
 
-        // Send address of DS3231 and write bit
+        // Send address of DS3231 in write mode
         I_MOVI(R0, 0b11010000),
         M_RETURN(L_RET03, R3, SUB_I2C_WRITE),
 
         // Read for the acknowledge bit
         M_RETURN(L_RET04, R3, SUB_I2C_READ_BIT),
-        I_MOVI(R1, 0),
-        I_PUT(R2, R1, ulp_var1),
         
         // Send write address for DS3231
         I_MOVI(R0, DS3231_CONTROL_ADDR),
@@ -130,19 +131,38 @@ void init_ulp()
         // Read for the acknowledge bit
         M_RETURN(L_RET06, R3, SUB_I2C_READ_BIT),
 
+        // Send repeated start
+        M_RETURN(L_RET07, R3, SUB_I2C_START),
+
+        // Send address of DS3231 in read mode
+        I_MOVI(R0, 0b11010001),
+        M_RETURN(L_RET08, R3, SUB_I2C_WRITE),
+
+        // Read for acknowledge bit
+        M_RETURN(L_RET09, R3, SUB_I2C_READ_BIT),
+
+        // Read byte from DS3231
+        M_RETURN(L_RET10, R3, SUB_I2C_READ),
+        // Store in memory
+        I_MOVI(R1, 0),
+        I_PUT(R2, R1, ulp_var1),                
+        
+        // Write not acknowledge bit.
+        I_MOVI(R0, 1),
+        M_RETURN(L_RET11, R3, SUB_I2C_WRITE_BIT),
+
         // Send new value for control register for DS3231
-        I_MOVI(R0, DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN),
-        M_RETURN(L_RET07, R3, SUB_I2C_WRITE),
+        //I_MOVI(R0, DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN),
+        //M_RETURN(L_RET07, R3, SUB_I2C_WRITE),
 
         // Read for the acknowledge bit
-        M_RETURN(L_RET08, R3, SUB_I2C_READ_BIT),
+        // M_RETURN(L_RET08, R3, SUB_I2C_READ_BIT),
 
         // Send stop condition
-        M_RETURN(L_RET09, R3, SUB_I2C_STOP),
+        M_RETURN(L_RET12, R3, SUB_I2C_STOP),
         
         I_END(),
         I_HALT(),
-
 
         
         // Write a single bit to the I2C slave
@@ -169,7 +189,7 @@ void init_ulp()
 
         // Read a single bit from the I2C slave
         // REQUIRES: R3 contains return address
-        // RETURNS: Bit read from I2C in R2
+        // RETURNS: Bit read from I2C in R0
         M_LABEL(SUB_I2C_READ_BIT),
             M_I2C_DATA_HI(),
 
@@ -183,8 +203,6 @@ void init_ulp()
 
             M_I2C_CLOCK_LO(),
             M_I2C_DELAY(),
-
-            I_MOVR(R2, R0),
         I_BXR(R3),
 
 
@@ -228,14 +246,16 @@ void init_ulp()
         M_LABEL(SUB_I2C_WRITE),
             // Copy argument into R2.
             I_MOVR(R2, R0),
+            /*
             // We'll use the upper half of R2 as a counter. We can't use the 
             // stage counter as it is already used by M_I2C_DELAY. 
             // The counter will count down by left shifting R2 (which is also
-            // used to get the next bit to write) until the MSB is 0. Then we 
-            // will write one more bit before returning.
-            I_ANDI(R2, R2, 0b0000000011111111),
-            I_ORI(R2, R2, 0b1111111000000000),
-
+            // used to get the next bit to write) until the MSB is 0 (=7 loops).
+            // Then we will write one more bit before returning.
+            I_ANDI(R2, R2, 0b0000000011111111), // Reset upper byte
+            I_ORI(R2, R2, 0b1111111000000000), // Set first 7 bits to 1
+            */
+            I_STAGE_RST(),
             // Loop start
             M_LABEL(L_LOOP00),
 
@@ -244,8 +264,8 @@ void init_ulp()
             I_ANDI(R0, R2, 0b10000000),
             I_LSHI(R2, R2, 1),
 
-            I_MOVI(R1, 0),
-            I_PUT(R0, R1, ulp_var1),
+            //I_MOVI(R1, 0),
+            //I_PUT(R0, R1, ulp_var1),
 
             // Save return address.
             I_MOVR(R1, R3),
@@ -254,22 +274,25 @@ void init_ulp()
             // Put return address back into R3
             I_MOVR(R3, R1),
 
+            I_STAGE_INC(1),
+            M_BSLT(L_LOOP00, 8),
+
             // Repeat the loop 7 times.
-            I_ANDI(R0, R2, 0b1000000000000000),
-            M_BGE(L_LOOP00, 1),
+            //I_ANDI(R0, R2, 0b1000000000000000),
+            //M_BGE(L_LOOP00, 1),
 
             // Get the last bit to write.
-            I_ANDI(R0, R2, 0b10000000),
+            //I_ANDI(R0, R2, 0b10000000),
 
-            I_MOVI(R1, 0),
-            I_PUT(R0, R1, ulp_var1),
+            //I_MOVI(R1, 0),
+            //I_PUT(R0, R1, ulp_var1),
 
             // Enter WRITE_BIT subroutine. Rather than saving the return address
             // and returning to this function, we'll give it the return address
             // of this function and return directly to the caller.
-            M_BX(SUB_I2C_WRITE_BIT),
+            //M_BX(SUB_I2C_WRITE_BIT),
 
-        // I_BXR(R3), // We never actually reach this instruction
+         I_BXR(R3), // We never actually reach this instruction
 
 
         // Read a byte from I2C slave.
@@ -278,7 +301,7 @@ void init_ulp()
         // RETURNS: Byte read in R2
         M_LABEL(SUB_I2C_READ),
             // Clear register R0 so we can use it to store the byte.
-            I_MOVI(R0, 0),
+            I_MOVI(R2, 0),
             // Reset the stage counter (loop counter).
             I_STAGE_RST(),
 
@@ -291,18 +314,15 @@ void init_ulp()
             M_RETURN(L_RET01, R3, SUB_I2C_READ_BIT),
             // Put return address back into R3
             I_MOVR(R3, R1),
-            // Shift R0 to make room for the next bit
-            I_LSHI(R0, R0, 1),
-            // Place the bit we read into the LSB of R0
-            I_ORR(R0, R0, R2),
+            // Shift R2 to make room for the next bit
+            I_LSHI(R2, R2, 1),
+            // Place the bit we read into the LSB of R2
+            I_ORR(R2, R2, R0),
 
             // Repeat loop 8 times total (1 byte)
             I_STAGE_INC(1),
             M_BSLT(L_LOOP01, 8),
-
-            // Move the byte we read into R2 (return value register)
-            I_MOVR(R2, R0),
-
+            
             M_I2C_DELAY(),
         I_BXR(R3),
         
@@ -408,7 +428,8 @@ void setup() {
     Wire.begin();
     DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
     creg = DS3231_get_creg();
-    printf("start var1: %d\nstart creg: %d\n\n", ulp_var1.val, creg);
+    printf("start var1: %d\nstart creg: %d\n\n", ulp_var1.reg_off, creg);
+    
 
     init_ulp();
     delay(5000);
@@ -423,6 +444,7 @@ void setup() {
 void loop() {
     printf("var1: %d\ncreg: %d\n\n", ulp_var1.val, DS3231_get_creg());
     delay(1000);
+    
     /*
     uint8_t flag = 0;
     sdaVal = digitalRead(ESP_SDA);
@@ -432,9 +454,10 @@ void loop() {
 
     while(digitalRead(ESP_SCL)) {
         if (sdaVal && !digitalRead(ESP_SDA) && !flag) {
-            printf("START COND\n");
+            printf("START COND\n\n");
             flag = 1;
         }
     }
-    while(!digitalRead(ESP_SCL));*/
+    while(!digitalRead(ESP_SCL));
+    */
 }
