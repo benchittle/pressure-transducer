@@ -38,27 +38,21 @@
 
 #define M_I2C_DELAY() M_DELAY_US_100_5000(5000)
 
-#define SLAVE_ADDR MS5803_I2C_ADDRESS
-
-// Set for 8-bit read:
-#define SLAVE_READ8_SUBADDR (CMD_ADC_CONV + CMD_ADC_D1 + CMD_ADC_4096)
-
-// Set for 16-bit read:
-// #define SLAVE_READ16_SUBADDR 0x0
-
-// Set subaddress and value for write:
- //#define SLAVE_WRITE_SUBADDR CMD_RESET
- //#define SLAVE_WRITE_VALUE CMD_RESET
-
 RTC_DATA_ATTR ulp_var_t ulp_var1;
 RTC_DATA_ATTR ulp_var_t ulp_var2;
 
-RTC_DATA_ATTR ulp_var_t ulp_read_cmd[HULP_I2C_CMD_BUF_SIZE(2)] = {
-    HULP_I2C_CMD_HDR_NO_PTR(MS5803_I2C_ADDRESS, 2)
+RTC_DATA_ATTR ulp_var_t ulp_read_cmd[HULP_I2C_CMD_BUF_SIZE(3)] = {
+    //HULP_I2C_CMD_HDR_NO_PTR(MS5803_I2C_ADDRESS, 2)
+    HULP_I2C_CMD_HDR_NO_PTR(MS5803_I2C_ADDRESS, 3)
 };
 
-RTC_DATA_ATTR ulp_var_t ulp_write_cmd[] = {
-    HULP_I2C_CMD_HDR(MS5803_I2C_ADDRESS, 0b10100100, 0),
+// TODO: Why does NO_PTR cause the command to become a read?
+RTC_DATA_ATTR ulp_var_t ulp_write_startconv_cmd[] = {
+    HULP_I2C_CMD_HDR(MS5803_I2C_ADDRESS, 0x48, 0),
+    //HULP_I2C_CMD_1B(0b10100000)
+};
+RTC_DATA_ATTR ulp_var_t ulp_write_read_cmd[] = {
+    HULP_I2C_CMD_HDR(MS5803_I2C_ADDRESS, 0x0, 0),
     //HULP_I2C_CMD_1B(0b10100000)
 };
 
@@ -70,7 +64,7 @@ RTC_DATA_ATTR ulp_var_t ulp_write_cmd[] = {
 uint8_t sdaVals[256];
 uint8_t count = 0;
 
-
+uint32_t varD1, varD2;
 
 uint8_t creg = 0;
 uint8_t sdaVal, sclVal;
@@ -94,7 +88,8 @@ void init_ulp()
     enum {
         L_READ,
         L_WRITE,
-        L_W_RETURN,
+        L_W_RETURN0,
+        L_W_RETURN1,
         L_R_RETURN,
     };
 
@@ -103,12 +98,19 @@ void init_ulp()
         M_I2C_DELAY(),
 
         
-        I_MOVO(R1, ulp_write_cmd),
-        M_MOVL(R3, L_W_RETURN),
+        I_MOVO(R1, ulp_write_startconv_cmd),
+        M_MOVL(R3, L_W_RETURN0),
         M_BX(L_WRITE),
-        M_LABEL(L_W_RETURN),
+        M_LABEL(L_W_RETURN0),
         
+        M_DELAY_US_5000_20000(15000),
 
+        I_MOVO(R1, ulp_write_read_cmd),
+        M_MOVL(R3, L_W_RETURN1),
+        M_BX(L_WRITE),
+        M_LABEL(L_W_RETURN1),
+
+        M_DELAY_US_100_5000(1000),
 
         I_MOVO(R1, ulp_read_cmd),
         M_MOVL(R3, L_R_RETURN),
@@ -140,7 +142,7 @@ void init_ulp()
 
 void setup() {
     Serial.begin(115200);
-    delay(500);
+    delay(1500);
     Serial.println("START");
 
     ulp_var1.val = 0;
@@ -161,6 +163,9 @@ void setup() {
     //printf("start var1: %d\nstart creg: %x\n\n", ulp_var1.reg_off, creg);
 
     sensor.initializeMS_5803(true);
+    sensor.readSensor();
+    printf("D1: %x \tD2: %x\n", sensor.D1val(), sensor.D2val());
+    printf("P: %f \tT: %f\n", sensor.pressure(), sensor.temperature());
 
     
 
@@ -177,13 +182,16 @@ void setup() {
 }
 
 
-
+// 24 bit Value is stored between two variable: read[offset + 0] = upper and mid byte, 
+//                                              read[offset + 1] >> 8 = lower byte
 void loop() {
     
-    printf("c0: %d \tc1: %d\n\n", ulp_read_cmd[HULP_I2C_CMD_DATA_OFFSET].val, ulp_read_cmd[HULP_I2C_CMD_DATA_OFFSET + 1].val);
+    printf("v0: %x \tv1: %x\n\n", ulp_read_cmd[HULP_I2C_CMD_DATA_OFFSET].val, ulp_read_cmd[HULP_I2C_CMD_DATA_OFFSET + 1].val);
     delay(1000);   
     
 }
+
+
 
 void monitor() {
     while (1) {
