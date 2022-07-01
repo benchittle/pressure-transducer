@@ -19,16 +19,24 @@
 #define SCL_PIN GPIO_NUM_14 
 #define SDA_PIN GPIO_NUM_13
 
-RTC_DATA_ATTR ulp_var_t ulp_buffer[50];
+// The number of samples to take before buffer needs to be emptied
+#define ULP_BUFFER_SAMPLES 10
+#define ULP_BUFFER_SIZE (ULP_BUFFER_SAMPLES * 4)
+
+RTC_DATA_ATTR ulp_var_t ulp_buffer[ULP_BUFFER_SIZE];
 RTC_DATA_ATTR ulp_var_t ulp_buf_offset;
 RTC_DATA_ATTR ulp_var_t ulp_D2_flag;
 
-RTC_DATA_ATTR ulp_var_t ulp_var1;
-RTC_DATA_ATTR ulp_var_t ulp_var2;
+RTC_DATA_ATTR ulp_var_t ulp_full_flag;
 
 RTC_DATA_ATTR ulp_var_t ulp_i2c_read_sensor[HULP_I2C_CMD_BUF_SIZE(3)] = {
     //HULP_I2C_CMD_HDR_NO_PTR(MS5803_I2C_ADDRESS, 2)
     HULP_I2C_CMD_HDR_NO_PTR(MS5803_I2C_ADDRESS, 3)
+};
+
+RTC_DATA_ATTR ulp_var_t ulp_i2c_write_clearAlarm[] = {
+    HULP_I2C_CMD_HDR(DS3231_I2C_ADDR, DS3231_STATUS_ADDR, 1),
+    HULP_I2C_CMD_1B(0x0)
 };
 
 // TODO: Why does NO_PTR cause the command to become a read?
@@ -68,6 +76,8 @@ C7 = 6
 */
 MS_5803 sensor(4096);
 
+
+
 void init_ulp()
 {
     enum {
@@ -77,25 +87,29 @@ void init_ulp()
         L_WRITE,
         L_W_RETURN0,
         L_W_RETURN1,
+        L_W_RETURN2,
         L_R_RETURN,
+        L_DONE,
     };
 
 
     const ulp_insn_t program[] = {
+
         
         // Check to see if the RTC alarm was triggered. If so, continue. 
         // Otherwise, halt and put the ULP back to sleep until the next cycle.
-        I_GPIO_INT_RD(RTC_ALARM),
-        I_BGE(2, 1), // Skip halt if triggered
-        I_HALT(),
+        I_GPIO_READ(RTC_ALARM),
+        M_BGE(L_DONE, 1),
         
-        // Clear the interrupt that was triggered
-        I_GPIO_INT_CLR(RTC_ALARM),
+        // Clear the interrupt that was triggered on DS3231
+        I_MOVO(R1, ulp_i2c_write_clearAlarm),
+        M_MOVL(R3, L_W_RETURN2),
+        M_BX(L_WRITE),
+        M_LABEL(L_W_RETURN2),
 
         // Clear D2 read flag
-        I_MOVI(R2, 0),
         I_MOVI(R0, 0),
-        I_PUT(R0, R2, ulp_D2_flag),
+        I_PUT(R0, R0, ulp_D2_flag),
         
         // Issue I2C command to MS5803 to start ADC conversion
         I_MOVO(R1, ulp_i2c_write_convertD1),
@@ -131,20 +145,29 @@ void init_ulp()
 
         // Loop back and repeat for D2. If D2 was just read, jump past next block.
         I_GET(R0, R2, ulp_D2_flag),
-        I_BGE(5, 1),
+        I_BGE(4, 1),
 
-        // Set D2 flag before branching to get D2.
-        I_MOVI(R0, 1),
-        I_PUT(R0, R2, ulp_D2_flag),
+        // Set D2 flag before branching to get D2. (R3 is used to save an 
+        // instruction, since we know R3 > 0, we don't need to MOVI(R3, 1) 
+        // first).
+        I_PUT(R3, R2, ulp_D2_flag),
         I_MOVO(R1, ulp_i2c_write_convertD2),
         M_BX(L_LOOP_FOR_D2),
 
         // Branch here if we've already read D2.
+
+        // Check if the buffer is full and respond accordingly (i.e. wake up
+        // processor and write to flash).
+        I_MOVR(R0, R3),
+        M_BL(L_DONE, ULP_BUFFER_SIZE),
+        //I_WAKE(),
+        I_PUT(R3, R2, ulp_full_flag),
         I_END(),
+
+        M_LABEL(L_DONE),
         I_HALT(),
 
         M_INCLUDE_I2CBB_CMD(L_READ, L_WRITE, SCL_PIN, SDA_PIN),
-
     };
     
     //ESP_ERROR_CHECK(hulp_configure_pin(SCL_PIN, RTC_GPIO_MODE_INPUT_OUTPUT, GPIO_FLOATING, 0));
@@ -152,14 +175,14 @@ void init_ulp()
 
     ESP_ERROR_CHECK(hulp_configure_pin(SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
     ESP_ERROR_CHECK(hulp_configure_pin(SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));   
-    ESP_ERROR_CHECK(hulp_configure_pin_int(RTC_ALARM, GPIO_INTR_LOW_LEVEL));
+    ESP_ERROR_CHECK(hulp_configure_pin(RTC_ALARM, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));
 
     hulp_peripherals_on();
 
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     
 
-    ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), 1ULL * 1000 * 1000, 0));
+    ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), 1000, 0));
     ESP_ERROR_CHECK(hulp_ulp_run(0));
 }
 
@@ -168,7 +191,7 @@ void setup() {
     delay(1500);
     Serial.println("START");
 
-    ulp_var1.val = 0;
+    ulp_full_flag.val = 0;
     ulp_buf_offset.val = 0;
     ulp_D2_flag.val = 0;
 
@@ -176,6 +199,21 @@ void setup() {
 
     pinMode(ESP_SDA, INPUT);
     pinMode(ESP_SCL, INPUT);
+
+    Wire.begin();
+    DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
+    DS3231_clear_a1f();
+    DS3231_clear_a2f();
+
+    // Start the once-per-second alarm on the DS3231:
+    // These flags set the alarm to be in once-per-second mode.
+    const uint8_t flags[] = {1,1,1,1,0};
+    // Set the alarm. The time value doesn't matter in once-per-second
+    // mode.
+    DS3231_set_a1(1, 1, 1, 1, flags);
+    // Enable the alarm. It will now bring the RTC_ALARM GPIO low every
+    // second.
+    DS3231_set_creg(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN | DS3231_CONTROL_A1IE);
     
     sensor.initializeMS_5803(true);
     sensor.readSensor();
@@ -184,7 +222,7 @@ void setup() {
 
     init_ulp();
     
-    
+    /*
     while (!digitalRead(ESP_SCL) || !digitalRead(ESP_SDA));
     
     monitor();
@@ -196,18 +234,32 @@ void setup() {
     printf("Offset: %d\n", ulp_buf_offset.val);
         for (int i = 0; i < 4; i++) {
         printf("D%d: %x\n", i / 2 + 1, ulp_buffer[i].val);
-    }
+    }*/
     
 }
 
 
 // 24 bit Value is stored between two variable: read[offset + 0] = upper and mid byte, 
 //                                              read[offset + 1] >> 8 = lower byte
+// delayed 30ms
+int offset = 0;
+time_t t;
+ulp_var_t raw_buffer[ULP_BUFFER_SIZE];
 void loop() {
-    
-    printf("buf: %x \tcount: %d\n\n", ulp_buffer[ulp_buf_offset.val / 4].val, ulp_buf_offset.val);
-    delay(1000);   
-    
+    if (ulp_buf_offset.val - offset >= 4) {
+        t = millis();
+        printf("t: %d \tbuf: %x \toffset: %d\n", millis(), ulp_buffer[ulp_buf_offset.val / 4].val, ulp_buf_offset.val);   
+        offset = ulp_buf_offset.val;
+    }
+    if (ulp_full_flag.val != 0) {
+        memcpy(raw_buffer, ulp_buffer, ULP_BUFFER_SIZE * sizeof(ulp_buffer[0]));
+        init_ulp();
+        //printf("Write to flash!\tt: %d\n", millis() - t);
+        ulp_buf_offset.val = 0;
+        ulp_full_flag.val = 0;
+        offset = 0;
+    }
+    //delay(10);
 }
 
 
