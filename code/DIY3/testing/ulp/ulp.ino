@@ -7,6 +7,8 @@
 #include "ds3231.h"
 #include "MS5803_05.h"
 
+#define POW_2_33 8589934592ULL;
+
 #define RTC_ALARM GPIO_NUM_25
 
 
@@ -20,8 +22,9 @@
 #define SDA_PIN GPIO_NUM_14
 
 // The number of samples to take before buffer needs to be emptied
-#define ULP_BUFFER_SAMPLES 10
-#define ULP_BUFFER_SIZE (ULP_BUFFER_SAMPLES * 4)
+#define ULP_BUFFER_SAMPLES 100
+#define ULP_SAMPLE_SIZE 4
+#define ULP_BUFFER_SIZE (ULP_BUFFER_SAMPLES * ULP_SAMPLE_SIZE)
 
 RTC_DATA_ATTR ulp_var_t ulp_buffer[ULP_BUFFER_SIZE];
 RTC_DATA_ATTR ulp_var_t ulp_buf_offset;
@@ -50,33 +53,15 @@ RTC_DATA_ATTR ulp_var_t ulp_i2c_write_convertD2[] = {
 
 RTC_DATA_ATTR ulp_var_t ulp_i2c_write_readADC[] = {
     HULP_I2C_CMD_HDR(MS5803_I2C_ADDRESS, 0x0, 0),
-    //HULP_I2C_CMD_1B(0b10100000)
 };
 
-// addr: 1101000(0|1)
-// ctrl: 00001110
-// 92 = 01011100 
+typedef struct {
+    //uint32_t timestamp;
+    float pressure;
+    int8_t temperature;
+} __attribute__((packed)) entry_t;
 
-
-uint8_t sdaVals[256];
-uint8_t count = 0;
-
-uint32_t varD1, varD2;
-
-// addr: 0x77 = 0b1110111
-/*
-C0 = 0
-C1 = 26325
-C2 = 22307
-C3 = 32375
-C4 = 14479
-C5 = 32716
-C6 = 28642
-C7 = 6
-*/
-MS_5803 sensor(4096);
-
-
+RTC_DATA_ATTR MS_5803 sensor(4096);
 
 void init_ulp()
 {
@@ -160,8 +145,8 @@ void init_ulp()
         // processor and write to flash).
         I_MOVR(R0, R3),
         M_BL(L_DONE, ULP_BUFFER_SIZE),
-        //I_WAKE(),
-        I_PUT(R3, R2, ulp_full_flag),
+        I_WAKE(),
+        //I_PUT(R3, R2, ulp_full_flag),
         I_END(),
 
         M_LABEL(L_DONE),
@@ -190,37 +175,81 @@ void setup() {
     Serial.begin(115200);
     delay(1500);
     Serial.println("START");
-
-    ulp_full_flag.val = 0;
-    ulp_buf_offset.val = 0;
-    ulp_D2_flag.val = 0;
-
-    hulp_peripherals_on();
-
+    
     pinMode(ESP_SDA, INPUT);
     pinMode(ESP_SCL, INPUT);
 
-    Wire.begin();
-    DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
-    DS3231_clear_a1f();
-    DS3231_clear_a2f();
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON: {
+            ulp_full_flag.val = 0;
+            ulp_buf_offset.val = 0;
+            ulp_D2_flag.val = 0;
 
-    // Start the once-per-second alarm on the DS3231:
-    // These flags set the alarm to be in once-per-second mode.
-    const uint8_t flags[] = {1,1,1,1,0};
-    // Set the alarm. The time value doesn't matter in once-per-second
-    // mode.
-    DS3231_set_a1(1, 1, 1, 1, flags);
-    // Enable the alarm. It will now bring the RTC_ALARM GPIO low every
-    // second.
-    DS3231_set_creg(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN | DS3231_CONTROL_A1IE);
-    
-    sensor.initializeMS_5803(true);
-    sensor.readSensor();
-    printf("D1: %x \tD2: %x\n", sensor.D1val(), sensor.D2val());
-    printf("P: %f \tT: %f\n", sensor.pressure(), sensor.temperature());
+            hulp_peripherals_on();
 
-    init_ulp();
+            Wire.begin();
+            DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
+            DS3231_clear_a1f();
+            DS3231_clear_a2f();
+
+            // Start the once-per-second alarm on the DS3231:
+            // These flags set the alarm to be in once-per-second mode.
+            const uint8_t flags[] = {1,1,1,1,0};
+            // Set the alarm. The time value doesn't matter in once-per-second
+            // mode.
+            DS3231_set_a1(1, 1, 1, 1, flags);
+            // Enable the alarm. It will now bring the RTC_ALARM GPIO low every
+            // second.
+            DS3231_set_creg(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN | DS3231_CONTROL_A1IE);
+            
+            sensor.initializeMS_5803(true);
+            sensor.readSensor();
+            printf("D1: %x \tD2: %x\n", sensor.D1val(), sensor.D2val());
+            printf("P: %f \tT: %f\n", sensor.pressure(), sensor.temperature());
+
+            init_ulp();
+
+            esp_sleep_enable_ulp_wakeup();
+            esp_deep_sleep_start();
+            
+            break; // we never reach this due to sleep
+        }
+
+        case ESP_RST_DEEPSLEEP: {
+            // Make a copy of the raw data.
+            ulp_var_t raw[ULP_BUFFER_SIZE];
+            memcpy(raw, ulp_buffer, ULP_BUFFER_SIZE * sizeof(ulp_buffer[0]));
+
+            // Restart the ULP as soon as we've made a copy of the data, since 
+            // it can run in parallel with the main program that will process 
+            // the raw data.
+            ulp_buf_offset.val = 0;
+            ulp_full_flag.val = 0;
+            init_ulp();
+
+            entry_t buffer[ULP_BUFFER_SAMPLES];
+
+            for (uint16_t i = 0, j = 0; i < ULP_BUFFER_SAMPLES; i++, j += ULP_SAMPLE_SIZE) {
+                uint32_t varD1 = (raw[j].val << 8) | (raw[j + 1].val >> 8);
+                uint32_t varD2 = (raw[j + 2].val << 8) | (raw[j + 3].val >> 8);
+
+                sensor.convertRaw(varD1, varD2);
+                buffer[i] = {
+                    .pressure = sensor.pressure(),
+                    .temperature = (int8_t) sensor.temperature()
+                };
+
+            }
+
+            printf("P  \tT\n");
+            for (int i = 0; i < ULP_BUFFER_SAMPLES; i++) {
+                printf("%.2f  \t%d\n", buffer[i].pressure, buffer[i].temperature);
+            }
+
+            esp_sleep_enable_ulp_wakeup();
+            esp_deep_sleep_start();
+        }
+    }
     
     /*
     while (!digitalRead(ESP_SCL) || !digitalRead(ESP_SDA));
@@ -242,10 +271,12 @@ void setup() {
 // 24 bit Value is stored between two variable: read[offset + 0] = upper and mid byte, 
 //                                              read[offset + 1] >> 8 = lower byte
 // delayed 30ms
+/*
 int offset = 0;
 time_t t;
 ulp_var_t raw_buffer[ULP_BUFFER_SIZE];
-void loop() {
+*/
+void loop() {} /*
     if (ulp_buf_offset.val - offset >= 4) {
         t = millis();
         printf("t: %d \tbuf: %x \toffset: %d\n", millis(), ulp_buffer[ulp_buf_offset.val / 4].val, ulp_buf_offset.val);   
@@ -261,9 +292,9 @@ void loop() {
     }
     //delay(10);
 }
+*/
 
-
-
+/*
 void monitor() {
     while (1) {
         uint8_t flag = 0;
@@ -286,7 +317,7 @@ void monitor() {
                 count++;
                 flag = 1;
             }
-            */
+            * /
         }
         t1 = millis();
         while(!digitalRead(ESP_SCL)) {
@@ -296,3 +327,4 @@ void monitor() {
         }
     }
 }
+*/
