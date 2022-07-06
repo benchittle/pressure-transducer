@@ -16,8 +16,8 @@
 
 
 // ULP I2C connections
-#define SCL_PIN GPIO_NUM_14 
-#define SDA_PIN GPIO_NUM_13
+#define SCL_PIN GPIO_NUM_0
+#define SDA_PIN GPIO_NUM_14
 
 // The number of samples to take before buffer needs to be emptied
 #define ULP_BUFFER_SAMPLES 10
