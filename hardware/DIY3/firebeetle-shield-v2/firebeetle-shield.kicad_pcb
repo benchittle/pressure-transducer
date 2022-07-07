@@ -1007,7 +1007,7 @@
   (gr_text "32K" (at 108.142 107.992 -90) (layer "F.SilkS") (tstamp f28ee06a-2b79-4887-94fa-a9f8259667dc)
     (effects (font (size 1 1) (thickness 0.15)))
   )
-  (gr_text "Notes for next iteration:\n[ ] put shield header pin outline on front silkscreen\n[x] maybe change JST pin spacing to 2.54 mm instead of 2 mm? No, needs to stay compatible with existing sensors\n[o] change {dblquote}UWindsor Coastal Group{dblquote} to {dblquote}Windsor Coastal Group{dblquote} and increase font size\n[ ] include group logo\n\nRTC:\n[ ] Connect DS3231 3V3 directly to D3, not main board's 3V3\n[ ] Include I2C pull up resistors\n[x] Maybe just include DS3231 chip directly? No, it costs more and makes more sense to keep modular\n\n\nStorage:\n[ ] Switch from SD to flash chip\n\nULP\n[ ] I2C connections and Pull up resistors?" (at 143 97) (layer "Cmts.User") (tstamp b1ba92d5-0d41-4be9-b483-47d08dc1785d)
+  (gr_text "Notes for next iteration:\n[ ] put shield header pin outline on front silkscreen\n[x] maybe change JST pin spacing to 2.54 mm instead of 2 mm? No, needs to stay compatible with existing sensors\n[o] change {dblquote}UWindsor Coastal Group{dblquote} to {dblquote}Windsor Coastal Group{dblquote} and increase font size\n[ ] include group logo\n[ ] flip text 180 so it matches up with pinout image\n\nRTC:\n[ ] Connect DS3231 3V3 directly to D3, not main board's 3V3\n[ ] Include I2C pull up resistors\n[x] Maybe just include DS3231 chip directly? No, it costs more and makes more sense to keep modular\n\n\nStorage:\n[ ] Switch from SD to flash chip\n\nULP\n[ ] I2C connections and Pull up resistors?" (at 143 97) (layer "Cmts.User") (tstamp b1ba92d5-0d41-4be9-b483-47d08dc1785d)
     (effects (font (size 1 1) (thickness 0.15)) (justify left))
   )
 
