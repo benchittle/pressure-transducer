@@ -12,6 +12,80 @@ OUTPATH = "/home/benc/Documents/DIY3_out/default/"
 # Data files from before this data will be ignored.
 START = datetime(2022, 5, 31, 22)
 
+def readV1(raw):
+    # Dictionary to store unpacked data. We convert this to a DataFrame 
+    # later.
+    unpacked = {"timestamp":[], "pressure":[], "temperature":[]}
+    # Loop through the data by bytes. If a file has any missing bytes,
+    # attempt to add NaN values to finish the row.
+    try:
+        for i in range(0, len(raw), 9):
+            # The first 4 bytes are a Unix timestamp (unsigned int)
+            timestamp = struct.unpack("<i", raw[i : i + 4])[0]
+            # Convert it into a datetime timestamp object so Pandas 
+            # knows what it is.
+            unpacked["timestamp"].append(datetime.utcfromtimestamp(timestamp))
+            # The next 4 bytes represent the pressure as a float.
+            unpacked["pressure"].append(struct.unpack("<f", raw[i + 4 : i + 8])[0])
+            # The last byte represents the temperature as a signed int
+            unpacked["temperature"].append(struct.unpack("<B", raw[i + 8 : i + 9])[0])
+            
+            #print(f"Time: {timestr} \tPressure: {pressure} \tTemperature: {temperature}")
+    
+    except struct.error:
+        print(f"Error reading {fullFileName}")
+        # Add NaN values to keep the column lengths the same.
+        if len(unpacked["pressure"]) < len(unpacked["timestamp"]):
+            unpacked["pressure"].append(pd.NA)
+        if len(unpacked["temperature"]) < len(unpacked["pressure"]):
+            unpacked["temperature"].append(pd.NA)
+
+
+    # Read the data into a pandas DataFraame
+    return pd.DataFrame(unpacked)
+
+
+def readV2(raw):
+    bufferSize = 10
+    entrySize = 5
+    timestampSize = 4
+    # Dictionary to store unpacked data. We convert this to a DataFrame 
+    # later.
+    unpacked = {"timestamp":[], "pressure":[], "temperature":[]}
+    # Loop through the data by bytes. If a file has any missing bytes,
+    # attempt to add NaN values to finish the row.
+    try:
+        i = 0
+        while (i < len(raw)):
+            timestamp = struct.unpack("<i", raw[i : i + timestampSize])[0]
+            i += timestampSize
+            for j in range(i, i + bufferSize * entrySize, entrySize):
+                # Convert it into a datetime timestamp object so Pandas 
+                # knows what it is.
+                unpacked["timestamp"].append(datetime.utcfromtimestamp(timestamp))
+                # The next 4 bytes represent the pressure as a float.
+                unpacked["pressure"].append(struct.unpack("<f", raw[j : j + 4])[0])
+                # The last byte represents the temperature as a signed int
+                unpacked["temperature"].append(struct.unpack("<B", raw[j + 4 : j + 5])[0])
+
+                timestamp += 1
+            i += bufferSize * entrySize
+                
+                #print(f"Time: {timestr} \tPressure: {pressure} \tTemperature: {temperature}")
+    
+    except struct.error:
+        print(f"Error reading {fullFileName}")
+        # Add NaN values to keep the column lengths the same.
+        if len(unpacked["pressure"]) < len(unpacked["timestamp"]):
+            unpacked["pressure"].append(pd.NA)
+        if len(unpacked["temperature"]) < len(unpacked["pressure"]):
+            unpacked["temperature"].append(pd.NA)
+
+
+    # Read the data into a pandas DataFraame
+    return pd.DataFrame(unpacked)
+
+
 # Loop through all external devices (TODO: Only loop through sensor cards)
 for folder in os.listdir(INPATH):
     # Loop through all files in the root folder of the device.
@@ -42,36 +116,8 @@ for folder in os.listdir(INPATH):
         with open(filePath, "rb") as file:
             raw = file.read()
 
-        # Dictionary to store unpacked data. We convert this to a DataFrame 
-        # later.
-        unpacked = {"timestamp":[], "pressure":[], "temperature":[]}
-        # Loop through the data by bytes. If a file has any missing bytes,
-        # attempt to add NaN values to finish the row.
-        try:
-            for i in range(0, len(raw), 9):
-                # The first 4 bytes are a Unix timestamp (unsigned int)
-                timestamp = struct.unpack("<i", raw[i : i + 4])[0]
-                # Convert it into a datetime timestamp object so Pandas 
-                # knows what it is.
-                unpacked["timestamp"].append(datetime.utcfromtimestamp(timestamp))
-                # The next 4 bytes represent the pressure as a float.
-                unpacked["pressure"].append(struct.unpack("<f", raw[i + 4 : i + 8])[0])
-                # The last byte represents the temperature as a signed int
-                unpacked["temperature"].append(struct.unpack("<B", raw[i + 8 : i + 9])[0])
-                
-                #print(f"Time: {timestr} \tPressure: {pressure} \tTemperature: {temperature}")
+        data = readV2(raw)
         
-        except struct.error:
-            print(f"Error reading {fullFileName}")
-            # Add NaN values to keep the column lengths the same.
-            if len(unpacked["pressure"]) < len(unpacked["timestamp"]):
-                unpacked["pressure"].append(pd.NA)
-            if len(unpacked["temperature"]) < len(unpacked["pressure"]):
-                unpacked["temperature"].append(pd.NA)
-
-
-        # Read the data into a pandas DataFraame
-        data = pd.DataFrame(unpacked)
         # Create the output directory if it doesn't already exist.
         if not os.path.exists(f"{OUTPATH}"):
             os.mkdir(f"{OUTPATH}")
