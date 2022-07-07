@@ -7,7 +7,6 @@
 #include "ds3231.h"
 #include "MS5803_05.h"
 
-#define POW_2_33 8589934592ULL;
 
 #define RTC_ALARM GPIO_NUM_25
 
@@ -83,7 +82,7 @@ void init_ulp()
         
         // Check to see if the RTC alarm was triggered. If so, continue. 
         // Otherwise, halt and put the ULP back to sleep until the next cycle.
-        I_GPIO_READ(RTC_ALARM),
+        I_GPIO_READ(RTC_ALARM_PIN),
         M_BGE(L_DONE, 1),
         
         // Clear the interrupt that was triggered on DS3231
@@ -160,7 +159,7 @@ void init_ulp()
 
     ESP_ERROR_CHECK(hulp_configure_pin(SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
     ESP_ERROR_CHECK(hulp_configure_pin(SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));   
-    ESP_ERROR_CHECK(hulp_configure_pin(RTC_ALARM, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));
+    ESP_ERROR_CHECK(hulp_configure_pin(RTC_ALARM_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));
 
     hulp_peripherals_on();
 
@@ -184,8 +183,6 @@ void setup() {
             ulp_full_flag.val = 0;
             ulp_buf_offset.val = 0;
             ulp_D2_flag.val = 0;
-
-            hulp_peripherals_on();
 
             Wire.begin();
             DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
