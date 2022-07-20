@@ -31,7 +31,7 @@
 
 // Number of readings (pressure and temperature) to store in a buffer before we 
 // dump to the SD card.
-#define BUFFER_SIZE 10
+#define BUFFER_SIZE 120
 // Number of ulp_var_t's needed for one raw pressure and temperature reading.
 // (24 bits for raw pressure, 24 bits for raw temperature; could be packed 
 // in only 3 spaces with more ULP processing).
@@ -319,6 +319,11 @@ void setup() {
             DS3231_get(&timeNow);
             oldDay = timeNow.mday;
 
+            #if ECHO_TO_SERIAL
+                printf("Time: %d-%02d-%02d %02d:%02d:%02d\n\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                Serial.flush();
+            #endif
+
             // Start the once-per-second alarm on the DS3231:
             // These flags set the alarm to be in once-per-second mode.
             const uint8_t flags[] = {1,1,1,1,0};
@@ -374,11 +379,6 @@ void setup() {
                 error(3);
             }
 
-            #if ECHO_TO_SERIAL
-                Serial.println("Going to sleep...");
-                Serial.flush();
-            #endif
-
             // Flash LED's to signal successful startup.
             warning(3000, 1);
 
@@ -398,6 +398,11 @@ void setup() {
 
             // Start the ULP program.
             init_ulp();
+
+            #if ECHO_TO_SERIAL
+                Serial.println("Going to sleep...");
+                Serial.flush();
+            #endif
 
             // Allow the ULP to trigger the ESP32 to wake up.
             esp_sleep_enable_ulp_wakeup();
