@@ -1,18 +1,17 @@
-
+#include <FS.h>
+#include <SD.h>
+#include <SPI.h>
+#include <Wire.h>
 #include <esp32/ulp.h>
 
 // ULP macro programming utility functions.
 // https://github.com/boarchuz/HULP
 #include "hulp.h" 
 #include "hulp_i2cbb.h"
-
 // Additional includes for peripheral devices
-#include <FS.h>
-#include <SD.h>
-#include <SPI.h>
-#include <Wire.h>
 #include "ds3231.h" // https://github.com/rodan/ds3231
 #include "MS5803_05.h" // https://github.com/benchittle/MS5803_05, a fork of Luke Miller's repo: https://github.com/millerlp/MS5803_05
+
 
 #define ECHO_TO_SERIAL 0
 
@@ -22,6 +21,9 @@
 #define ULP_SCL_PIN GPIO_NUM_0
 #define ULP_SDA_PIN GPIO_NUM_14
 #define ERROR_LED_PIN GPIO_NUM_2
+
+// Duration in ms for each flash of the LED when displaying an error / warning.
+#define LED_FLASH_DURATION 500
 
 // /NAME_YYYYMMDD-hhmm.data is the format.
 #define FILE_NAME_FORMAT "/%7s_%04d%02d%02d-%02d%02d.data"
@@ -39,8 +41,8 @@
 // Size of the buffer that the ULP will use to store raw data from the MS5803.
 #define ULP_BUFFER_SIZE (BUFFER_SIZE * ULP_SAMPLE_SIZE)
 
-// While the ULP is active, it will repeatedly run every time this duration 
-// passes (microseconds).
+// While the ULP is active, it will repeatedly run at this interval 
+// (microseconds).
 #define ULP_RUN_PERIOD 1000
 
 
@@ -49,22 +51,29 @@
 // padding bytes that would align to the nearest 4 bytes. This can cause issues
 // in some cases, but the ESP32 doesn't seem to have a problem with it. By doing
 // this, we reduce the size of each entry from 12 bytes to 9 bytes.
-typedef struct {
+
+struct entry_t {
     float pressure;
     int8_t temperature;
-} __attribute__((packed)) entry_t;
+} __attribute__((packed));
 
 // Initialize a sensor object for interacting with the MS5803-05
 RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
 
 // Store the device's name (max 7 characters).
 RTC_DATA_ATTR char deviceName[8] = {0};
-// We need to store the name for the current data file across deep sleep 
-// restarts.
+// Store the name for the current data file across deep sleep restarts.
 RTC_DATA_ATTR char fileName[FILE_NAME_SIZE];
-RTC_DATA_ATTR uint8_t oldDay = 0;
-RTC_DATA_ATTR uint32_t firstSampleTimestamp;
 
+// Store the day of the month when the current output file was created. This is
+// used to determine when a new day has started (and thus when to start a new 
+// file).
+RTC_DATA_ATTR uint8_t oldDay = 0;
+
+// Store the epoch time for the first sensor reading in the buffer. This will be
+// stored in the output file along with the sensor data. This is updated every 
+// time the buffer is dumped.
+RTC_DATA_ATTR uint32_t firstSampleTimestamp;
 
 // An array for the ULP to buffer raw sensor data while the main processor is in
 // deep sleep. Once full, the data will be processed into meaningful pressure
@@ -109,18 +118,29 @@ RTC_DATA_ATTR ulp_var_t ulp_i2c_write_clearAlarm[] = {
 };
 
 
+// Error codes for the program. The value associated with each enum is also the
+// number of times the error LED will flash if an error is encountered.
+enum diy3_error_t {
+    ds3231Error = 1,
+    sdInitError,
+    sdConfigWarning,
+    sdFileError,
+    ms5803Error,
+    resetError
+};
+
+
 /*
  * Enter an endless loop while flashing the error LED a given number of times
  * each second.
  */
-void error(uint8_t flashes) {
-    uint16_t duration = 1000 / flashes;
+void error(diy3_error_t flashes) {
     while (1) {
         for (uint8_t i = 0; i < flashes; i++) {
             digitalWrite(ERROR_LED_PIN, HIGH);
-            delay(duration);
+            delay(LED_FLASH_DURATION);
             digitalWrite(ERROR_LED_PIN, LOW);
-            delay(duration);
+            delay(LED_FLASH_DURATION);
         }
         delay(1000);
     }
@@ -130,17 +150,21 @@ void error(uint8_t flashes) {
 /*
  * Flash the error LED to warn the user.
  */
-void warning(uint16_t duration, uint8_t flashes) {
+void warning(diy3_error_t flashes) {
     for (uint8_t i = 0; i < flashes; i++) {
         digitalWrite(ERROR_LED_PIN, HIGH);
-        delay(duration);
+        delay(LED_FLASH_DURATION);
         digitalWrite(ERROR_LED_PIN, LOW);
-        delay(duration);
+        delay(LED_FLASH_DURATION);
     }
     delay(500);
 }
 
 
+/* 
+ * Define the ULP program, configure the ULP appropriately, and upload the 
+ * program to the ULP. 
+ */ 
 void init_ulp()
 {
     // Define labels used in the ULP program.
@@ -276,7 +300,9 @@ void setup() {
         Serial.begin(115200);
     #else
         // ADC, WiFi, BlueTooth are disabled by default.        
-        // Default CPU frequency is 240MHz, but we don't need high speed.
+        // Default CPU frequency is 240MHz, but we don't need high speed. Note
+        // that the serial monitor baud rate changes with lower frequencies, so
+        // it is not changed when debugging.
         setCpuFrequencyMhz(10);     
     #endif
 
@@ -341,14 +367,14 @@ void setup() {
                     Serial.println(F("SD setup error"));
                     Serial.flush();
                 #endif
-                error(2);
+                error(sdInitError);
             }
 
             // Get device's name from SD card or use default.
             File config = SD.open("/config.txt", FILE_READ, false);
             if (!config) {
                 strcpy(deviceName, "DIY3-XX");
-                warning(500, 3);
+                warning(sdConfigWarning);
             } else {
                 config.read((uint8_t*) deviceName, sizeof(deviceName) - 1);
                 config.close();
@@ -364,7 +390,7 @@ void setup() {
                 #if ECHO_TO_SERIAL
                     Serial.println("Failed to create first file...");
                 #endif
-                error(2);
+                error(sdFileError);
             }
             f.close();
             SD.end();
@@ -376,11 +402,13 @@ void setup() {
                     Serial.println(F("MS5803-05 sensor setup error"));
                     Serial.flush();
                 #endif
-                error(3);
+                error(ms5803Error);
             }
 
             // Flash LED's to signal successful startup.
-            warning(3000, 1);
+            digitalWrite(ERROR_LED_PIN, HIGH);
+            delay(3000);
+            digitalWrite(ERROR_LED_PIN, LOW);
 
             DS3231_get(&timeNow);
             // Save a timestamp for the first sample. We'll add 1 second
@@ -501,7 +529,7 @@ void setup() {
                     Serial.println("Failed to open file");
                     Serial.flush();
                 #endif
-                error(4);
+                error(sdFileError);
             }
             // Write timestamp of first sample.
             size_t written = f.write((uint8_t*) &firstSampleTimestamp, sizeof(firstSampleTimestamp));
@@ -536,7 +564,7 @@ void setup() {
                         Serial.println("Failed to open file");
                         Serial.flush();
                     #endif
-                    error(4);
+                    error(sdFileError);
                 }
                 
                 f.close();
@@ -575,7 +603,7 @@ void setup() {
     #if ECHO_TO_SERIAL
         Serial.println("CONTROL LOST");
     #endif
-    error(5);
+    error(resetError);
 }
 
 void loop() {}
