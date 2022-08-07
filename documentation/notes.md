@@ -15,10 +15,31 @@ The sensor will be prepared and assembled within the housing before travelling t
 ---
 
 
+# 31 July 2022
+
+## Flaws with DIY2
+Now that DIY3 is matching or possibly outperforming DIY2, I can compare the two designs more closely.
+
+- **Battery life**: DIY2 uses 2 larger C cell batteries, while DIY3 uses 3 AA batteries. This should easily make DIY2 the winner, but with the most recent ULP update to DIY3, this may not be the case. DIY2 lacks some of the simple power saving measures used by DIY3, such as disconnecting the DS3231 RTC from main power and using smaller capacity SD cards (though they could be swapped in).
+
+- **Accuracy**: Both models use an MS5803 series pressure sensor. However, the DIY2 housings are equipped with the MS5803-14 model, while the DIY3 housings are equipped with the MS5803-05 model, which is a higher precision varient. This difference is noticeable in data results, but for the intended use of the sensors, the MS5803-14 is fine. Additionally, DIY2's code could easily be modified to function with a more accurate sensor.  
+The bigger issue has to do with battery voltage. The nominal voltage of alkaline C batteries and AA batteries is 1.5V. So, the total voltage going into the system (before the voltage regulator) will be around 3V and 4.5V in DIY2 and DIY3, respectively. However, these voltages drop as the battery is used. This is fine for DIY3: it only requires 3.3V to function, so the voltage regulator on the FireBeetle will dissipitate any extra voltage as heat until the voltage drops below 3.3V, at which point the device will shut down. But for DIY2, which operates at 3V, there is a problem: the moment the battery drops below nominal voltage, the device is no longer operating at 3V. This should cause the devices to stop sampling relatively quickly (batteries don't stay at their nominal voltage for that long), but because the ATmega328P (and other components) can operate at a wide enough voltage range, the device continues to operate well below 3V. However, as the voltage changes, so do the readings of the MS5803 sensor: i.e. taking the same pressure reading at 3.3V, 3V, and 2.7V will all yield different results. See the yellow curve in the following image for a drastic example (its batteries were rapidly declining). 
+![Pressure curves with falling voltage](imgs/falling_voltage.png)
+This makes the data inconsistent with other sensors over time. Of course, the simple solution is to add more batteries, but this issue was something I didn't consider when I first designed DIY2, so I thought it was worth a detailed look.
+
+- **Housing**: The housings for DIY2 and DIY3 are virtually identical, other than the MS5803-14 being used in DIY2 housings and the MS5803-05 being used in DIY3 housings. The last field visit revealed damage to some of the older DIY2 sensors, however. While there was no water inside any of the housings, a handful of them had stopped sampling at some point before we downloaded their data and wouldn't turn back on. I suspect that water managed to leak past the epoxy around the MS5803, and that's where it caused damage. We used several different liquid epoxies throughout DIY2 assembly, not all of them marine grade, and I think this was the mistake.  
+Another issue I noticed was the build up of "gunk" around the sensor ports. Our sensors are currently deployed for the summer throughout several freshwater lakes, which makes them a great target for that kind of thing. I've seen more advanced housings use mesh or an oil bladder around the sensor port to protect it. If we continue to deploy the sensors for a month or more at a time, I think we'll need to do the same to increase the longevity of the sensor housings.
+
+# 8 July 2022
+
+## An odd DS3231 problem
+While testing some new sensors that were just put together, I ran into some odd behaviour with the DS3231 boards I was using. It seemed like they worked fine when setting the time, reading the time, etc., but they didn't work in my main program. After a lot of fiddling around, I discovered the culprit was the coin cell batteries I was using. Although they were unused and no more than a year old, and my multimeter read a nominal 3V, it seemed as though they weren't working properly when the DS3231 was in battery backup mode. It would continue to keep the time, but the alarm functionality (perhaps all I2C as well) was simply not working. I'm not sure the reason for this issue as of now, but swapping to another coin cell brand seemed to solve the problem. (The culprit brand was Energizer, surprisingly).
+
+
 # 7 July 2022
 
 ## ULP Integration
-Over the last month I've been mostly busy with some other projects while the sensors are in the field, but I've slowly been chipping away at figuring out how to use the ESP32's ultra low power coprocessor (ULP) to log sensor readings. I wanted to take this approach from the start with these sensors, because of the amount of energy that can be saved compared to the current approach (waking the whole ESP32 once per second to read the sensor), but I didn't have enough time before the first deployment to figure it out. As of now, I've got what I believe to be a working version of the ULP code integrated into the main DIY3 program, so I'll go over it here.
+Over the last month I've been busy with some other projects while the sensors are collecting data in the field, but I've slowly been chipping away at figuring out how to use the ESP32's ultra low power coprocessor (ULP) to log sensor readings. I wanted to take this approach from the start with these sensors, because of the amount of energy that can be saved compared to the current approach (waking the whole ESP32 once per second to read the sensor), but I didn't have enough time before the first deployment to figure it out. As of now, I've got what I believe to be a working version of the ULP code integrated into the main DIY3 program, so I'll go over it here.
 
 I've talked about using the Legacy Macros to program the ULP when I was first experimenting with it, and that ended up being my method of choice again here. I also made extensive use of the [HULP](https://github.com/boarchuz/HULP) library: it's a gold mine of functionality and examples when it comes to programming the ULP with the legacy macros. It also provided the functionality for bit banged I2C to communicate with the MS5803, but I'll get to that later. 
 
