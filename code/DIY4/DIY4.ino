@@ -15,11 +15,14 @@
 
 #define ECHO_TO_SERIAL 0
 
-#define SD_CS_PIN GPIO_NUM_13 // TODO: Change this pin: FireBeetle uses it for LED
-#define RTC_POWER_PIN GPIO_NUM_26
-#define RTC_ALARM_PIN GPIO_NUM_25
-#define ULP_SCL_PIN GPIO_NUM_0
-#define ULP_SDA_PIN GPIO_NUM_14
+// Some functions require gpio_num_t types so we use those pin number 
+// definitions here.
+#define SD_CS_PIN GPIO_NUM_13 // D7 
+#define SD_SWITCH_PIN GPIO_NUM_15 // A4
+#define RTC_POWER_PIN GPIO_NUM_26 // D3
+#define RTC_ALARM_PIN GPIO_NUM_25 //D2
+#define ULP_SCL_PIN GPIO_NUM_0 // D5
+#define ULP_SDA_PIN GPIO_NUM_14 // D6
 #define ERROR_LED_PIN GPIO_NUM_2
 
 // Duration in ms for each flash of the LED when displaying an error / warning.
@@ -284,6 +287,7 @@ void init_ulp()
     ESP_ERROR_CHECK(hulp_configure_pin(ULP_SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
     ESP_ERROR_CHECK(hulp_configure_pin(ULP_SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));   
     ESP_ERROR_CHECK(hulp_configure_pin(RTC_ALARM_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));
+    //ESP_ERROR_CHECK(hulp_configure_pin(SD_SWITCH_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1));
 
     hulp_peripherals_on();
 
@@ -307,6 +311,7 @@ void setup() {
     #endif
 
     pinMode(SD_CS_PIN, OUTPUT);
+    pinMode(SD_SWITCH_PIN, OUTPUT);
     pinMode(RTC_POWER_PIN, OUTPUT);
     pinMode(RTC_ALARM_PIN, INPUT_PULLUP);
     pinMode(ERROR_LED_PIN, OUTPUT);
@@ -371,7 +376,7 @@ void setup() {
             }
 
             
-            File config = SD.open("/config.txt", FILE_READ, false);\
+            File config = SD.open("/config.txt", FILE_READ, false);
             /*
             uint16_t startYear = 0;
             uint8_t startMonth, startDay, startHour, startMinute;
@@ -425,6 +430,11 @@ void setup() {
             digitalWrite(ERROR_LED_PIN, HIGH);
             delay(3000);
             digitalWrite(ERROR_LED_PIN, LOW);
+            
+            #if ECHO_TO_SERIAL
+                Serial.println("Turning off SD power");
+            #endif
+            digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
 
             DS3231_get(&timeNow);
             // Save a timestamp for the first sample. We'll add 1 second
@@ -523,6 +533,11 @@ void setup() {
             #endif
 
             // Reinitialize connection with SD card.
+            #if ECHO_TO_SERIAL
+                Serial.println("Turning on SD power");
+            #endif
+            digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD card power
+            //delay(2000);
             if (!SD.begin(SD_CS_PIN)) {
                 #if ECHO_TO_SERIAL
                     Serial.println("Failed to reestablish SD");
@@ -588,6 +603,11 @@ void setup() {
             } 
 
             SD.end();
+            #if ECHO_TO_SERIAL
+                Serial.println("Turning off SD power in 1 sec");
+            #endif
+            delay(1000);
+            digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
 
             /*
             #if ECHO_TO_SERIAL
