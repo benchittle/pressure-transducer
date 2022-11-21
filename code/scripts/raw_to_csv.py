@@ -4,14 +4,14 @@ import pandas as pd
 import os
 
 # Path to media mount folder.
-INPATH = "/run/media/benc/"
-# Path to output folder. A new folder will be created if one doesn't already
-# exist.
-OUTPATH = "/home/benc/Documents/DIY3_out/default/"
+INPATH = "/home/benc/Documents/DIY4_out/first_test/" #"/run/media/benc/" ##
 
 # Data files from before this data will be ignored.
-START = datetime(2022, 5, 31, 22)
+START = datetime(2022, 11, 3, 12, 35)
 
+# TODO: Make faster read function, maybe do it in C
+
+# Used to read 
 def readV1(raw):
     # Dictionary to store unpacked data. We convert this to a DataFrame 
     # later.
@@ -46,7 +46,7 @@ def readV1(raw):
 
 
 def readV2(raw):
-    bufferSize = 10
+    bufferSize = 120
     entrySize = 5
     timestampSize = 4
     # Dictionary to store unpacked data. We convert this to a DataFrame 
@@ -87,40 +87,44 @@ def readV2(raw):
 
 
 # Loop through all external devices (TODO: Only loop through sensor cards)
-for folder in os.listdir(INPATH):
+#for folder in os.listdir(INPATH):
+folder = "raw"
     # Loop through all files in the root folder of the device.
-    for fullFileName in os.listdir(INPATH + folder + "/"):
-        # Store the full path to the current file as a string.
-        filePath = f"{INPATH}{folder}/{fullFileName}"
-        # Get the name and extension, i.e. name.ext
-        splitName, ext = os.path.splitext(fullFileName)
+for fullFileName in os.listdir(INPATH + folder + "/"):
+    # Store the full path to the current file as a string.
+    filePath = f"{INPATH}{folder}/{fullFileName}"
+    # Get the name and extension, i.e. name.ext
+    splitName, ext = os.path.splitext(fullFileName)
 
-        # Only use .data files (there may be config or other junk files on
-        # the device which we don't want to process).
-        if ext != ".data":
-            continue
-        
-        # Only take data from after the specified date. If the file name isn't
-        # in the right format (name_date-time.data) then skip it.
-        try:
-            sensorID, startTime = splitName.split("_")
-            startTime = datetime.strptime(startTime, r"%Y%m%d-%H%M")
-            if startTime < START:
-                continue
-        except ValueError:
-            print(f"Skipping {filePath}: incorrect name format")
-            continue
-    
-        # Open the file as a binary file and read it.
-        print("Reading " + filePath)
-        with open(filePath, "rb") as file:
-            raw = file.read()
+    # Only use .data files (there may be config or other junk files on
+    # the device which we don't want to process).
+    if ext != ".data":
+        continue
 
+    # Only take data from after the specified date. If the file name isn't
+    # in the right format (name_date-time.data) then skip it.
+    try:
+        sensorID, startTime = splitName.split("_")
+        startTime = datetime.strptime(startTime, r"%Y%m%d-%H%M")
+        if startTime < START:
+            continue
+    except ValueError:
+        print(f"Skipping {filePath}: incorrect name format")
+        continue
+
+    # Open the file as a binary file and read it.
+    print("Reading " + filePath)
+    with open(filePath, "rb") as file:
+        raw = file.read()
+
+    if splitName.startswith("DIY"):
         data = readV2(raw)
-        
-        # Create the output directory if it doesn't already exist.
-        if not os.path.exists(f"{OUTPATH}"):
-            os.mkdir(f"{OUTPATH}")
-        # Write the data to a CSV file with the same name as the raw 
-        # data.
-        data.to_csv(f"{OUTPATH}/{splitName}.csv", index=False)
+    else:
+        data = readV1(raw)
+    
+    # Create the output directory if it doesn't already exist.
+    if not os.path.exists(os.path.join(INPATH, "processed")):
+        os.mkdir(os.path.join(INPATH, "processed"))
+    # Write the data to a CSV file with the same name as the raw 
+    # data.
+    data.to_csv(os.path.join(INPATH, f"processed/{splitName}.csv"), index=False)
