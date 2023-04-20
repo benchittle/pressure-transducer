@@ -189,7 +189,7 @@ void init_ulp()
     //   code documentation of that project to understand the "recipe" to
     //   use bitbanged I2C on the ULP.
     // ULP Program Flow:
-    //   if DS3231's once-per-second alarm not active:
+    //   if DS3231's once-per-second alarm not triggered:
     //     put ULP back to sleep until next cycle
     //   else:
     //     clear alarm on DS3231

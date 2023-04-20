@@ -14,6 +14,12 @@ The sensor will be prepared and assembled within the housing before travelling t
 ---
 ---
 
+# 8 November 2022
+
+## DIY4
+A new design has been created! DIY4 is very similar to DIY3, with a few key differences: the shield PCB has been updated to include the changes I was making to each DIY3 shield by hand (this will save some time avoid some human error during assembly), and there is now space for a P-channel MOSFET on the shield that can turn power on and off to the SD card, allowing us to turn off the SD card during deep sleep. 
+
+With DIY3, I was measuring around 0.26 mA of current during deep sleep, with occasional spikes in the hundred microamps range whenever a reading was taken. With DIY4, with the SD card off, I'm measuring 0.07 mA of current during deep sleep: a whole order of magnitude lower! There are some potential issues with turning on and off SD cards, as discussed in [this blog post](https://thecavepearlproject.org/2017/05/21/switching-off-sd-cards-for-low-power-data-logging/). Namely, even after your program is finished writing to a card, they may still be doing "housekeeping" tasks in the background, which you do not want to interrupt by removing power. [This issue](https://github.com/greiman/SdFat/issues/21) provides more details on the specifics. 
 
 # 31 July 2022
 
