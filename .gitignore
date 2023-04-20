@@ -1,3 +1,4 @@
 .vscode/
 code/.build/
 *.code-workspace
+__pycache__
