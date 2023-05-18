@@ -320,6 +320,17 @@ void setup() {
     // powered or just woke up from deep sleep. 
     switch (esp_reset_reason()) {   
         case ESP_RST_POWERON: {
+            #if ECHO_TO_SERIAL
+                delay(500); // Wait for serial to be ready
+                Serial.printf(
+                    "BUFFER_SIZE=%d\n"
+                    "ULP_RUN_PERIOD=%d\n",
+                    BUFFER_SIZE, ULP_RUN_PERIOD
+                );
+                Serial.flush();
+            #endif
+
+
             ulpBufOffset.val = 0;
             ulpD2Flag.val = 0;
 
@@ -351,7 +362,7 @@ void setup() {
             oldDay = timeNow.mday;
 
             #if ECHO_TO_SERIAL
-                printf("Time: %d-%02d-%02d %02d:%02d:%02d\n\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                printf("RTC Time: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
                 Serial.flush();
             #endif
 
@@ -426,6 +437,16 @@ void setup() {
                 error(ms5803Error);
             }
 
+            #if ECHO_TO_SERIAL
+                Serial.print("Taking a sample sensor reading... ");
+                Serial.flush();
+
+                sensor.readSensor();
+
+                Serial.printf("Pressure: %f \tTemperature: %f\n", sensor.pressure(), sensor.temperature());
+                Serial.flush();
+            #endif
+
             // Flash LED's to signal successful startup.
             digitalWrite(ERROR_LED_PIN, HIGH);
             delay(3000);
@@ -433,6 +454,7 @@ void setup() {
             
             #if ECHO_TO_SERIAL
                 Serial.println("Turning off SD power");
+                Serial.flush();
             #endif
             digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
 
@@ -442,10 +464,18 @@ void setup() {
             // taken during the next second.
             firstSampleTimestamp = timeNow.unixtime + 1;
 
+            #if ECHO_TO_SERIAL
+                Serial.printf("Time is %d-%02d-%02d %02d:%02d:%02d. ", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                Serial.print("Waiting for next second... ");
+            #endif
             // Wait the rest of this second to start.
             while (timeNow.unixtime != firstSampleTimestamp) {
                 DS3231_get(&timeNow);
             }
+            #if ECHO_TO_SERIAL
+                Serial.print("Done\nDisabling DS3231 pin power and starting ULP...");
+                Serial.flush();
+            #endif
 
             // Disable power to the DS3231's VCC.
             digitalWrite(RTC_POWER_PIN, LOW);
@@ -454,7 +484,7 @@ void setup() {
             init_ulp();
 
             #if ECHO_TO_SERIAL
-                Serial.println("Going to sleep...");
+                Serial.println("Done\nSetup complete. Going to sleep...");
                 Serial.flush();
             #endif
 
@@ -525,7 +555,8 @@ void setup() {
 
             // Save the buffer to flash:
             #if ECHO_TO_SERIAL
-                Serial.printf("Dumping to card...\nt=%d\nP\t\tT\n", firstSampleTimestamp);
+                Serial.printf("RTC Time Now: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                Serial.printf("Dumping to card...\nFirst Timestamp=%d\nP\tT\n", firstSampleTimestamp);
                 for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
                     printf("%.2f \t%u\n", writeBuffer[i].pressure, writeBuffer[i].temperature);
                 }
