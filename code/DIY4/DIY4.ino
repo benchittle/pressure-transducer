@@ -367,6 +367,17 @@ void setup() {
                 Serial.flush();
             #endif
 
+            // TODO: Check Status register as well, as it indicates if time was 
+            // set since powered on (See #1)
+            if (timeNow.year < 2023) {
+                #if ECHO_TO_SERIAL
+                    Serial.println("WARNING: Time is out of date. Setting year to 2000 for UNIX time compatibility.");
+                    Serial.flush();
+                #endif
+                timeNow.year = 2000;
+                DS3231_set(timeNow);
+            }
+
             // Start the once-per-second alarm on the DS3231:
             // These flags set the alarm to be in once-per-second mode.
             const uint8_t flags[] = {1,1,1,1,0};
