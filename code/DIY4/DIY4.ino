@@ -311,6 +311,7 @@ void setup() {
     #endif
 
     pinMode(SD_CS_PIN, OUTPUT);
+    digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
     pinMode(SD_SWITCH_PIN, OUTPUT);
     pinMode(RTC_POWER_PIN, OUTPUT);
     pinMode(RTC_ALARM_PIN, INPUT_PULLUP);
@@ -378,6 +379,7 @@ void setup() {
 
 
             // Initialize the connection with the SD card.
+            digitalWrite(SD_SWITCH_PIN, LOW);
             if (!SD.begin(SD_CS_PIN)) {
                 #if ECHO_TO_SERIAL
                     Serial.println(F("SD setup error"));
