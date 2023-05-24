@@ -27,6 +27,9 @@
 
 // Duration in ms for each flash of the LED when displaying an error / warning.
 #define LED_FLASH_DURATION 500
+// Maximum number of times the device will attempt to restart on encountering an
+// error before entering an endless LED flashing loop.
+#define MAX_RESTART_COUNT 3
 
 // /NAME_YYYYMMDD-hhmm.data is the format.
 #define FILE_NAME_FORMAT "/%7s_%04d%02d%02d-%02d%02d.data"
@@ -68,6 +71,10 @@ RTC_DATA_ATTR char deviceName[8] = {0};
 // Store the name for the current data file across deep sleep restarts.
 RTC_DATA_ATTR char fileName[FILE_NAME_SIZE];
 
+// Track the number of times a custom error has been encountered causing the
+// device to restart.
+RTC_DATA_ATTR uint8_t restartCount = 0;
+
 // Store the day of the month when the current output file was created. This is
 // used to determine when a new day has started (and thus when to start a new 
 // file).
@@ -80,7 +87,7 @@ RTC_DATA_ATTR uint32_t firstSampleTimestamp;
 
 // An array for the ULP to buffer raw sensor data while the main processor is in
 // deep sleep. Once full, the data will be processed into meaningful pressure
-// and temperature values and written to flash storage.
+// and temperature values and w.... TODO.... TODOritten to flash storage.
 RTC_DATA_ATTR ulp_var_t ulpBuffer[ULP_BUFFER_SIZE];
 // Used to index the ULP's buffer in the ULP program.
 RTC_DATA_ATTR ulp_var_t ulpBufOffset;
@@ -134,12 +141,36 @@ enum diy3_error_t {
 
 
 /*
- * Enter an endless loop while flashing the error LED a given number of times
- * each second.
+ * Try to restart the device or enter an endless error loop otherwise, flashing
+ * the LED in a given sequence to indicate the error.
  */
 void error(diy3_error_t flashes) {
+    // First flash the error sequence 3 times on the LED.
+    for (uint8_t i = 0; i < 3; ++i) {
+        for (uint8_t i = 0; i < flashes; ++i) {
+            digitalWrite(ERROR_LED_PIN, HIGH);
+            delay(LED_FLASH_DURATION);
+            digitalWrite(ERROR_LED_PIN, LOW);
+            delay(LED_FLASH_DURATION);
+        }
+        delay(1000);
+    }
+
+    // Try to restart the device.
+    if (restartCount < MAX_RESTART_COUNT) {
+        for (uint8_t i = 0; i < 5; ++i) {
+            digitalWrite(ERROR_LED_PIN, HIGH);
+            delay(LED_FLASH_DURATION / 4);
+            digitalWrite(ERROR_LED_PIN, LOW);
+            delay(LED_FLASH_DURATION / 4);
+        }
+        ++restartCount;
+        ESP.restart();
+    }
+
+    // Otherwise, continuously flash the error sequence on the LED.
     while (1) {
-        for (uint8_t i = 0; i < flashes; i++) {
+        for (uint8_t i = 0; i < flashes; ++i) {
             digitalWrite(ERROR_LED_PIN, HIGH);
             delay(LED_FLASH_DURATION);
             digitalWrite(ERROR_LED_PIN, LOW);
@@ -320,7 +351,8 @@ void setup() {
     // Jump to the appropriate code depending on whether the ESP32 was just 
     // powered or just woke up from deep sleep. 
     switch (esp_reset_reason()) {   
-        case ESP_RST_POWERON: {
+        case ESP_RST_POWERON:
+        case ESP_RST_SW: {
             #if ECHO_TO_SERIAL
                 delay(500); // Wait for serial to be ready
                 Serial.printf(
