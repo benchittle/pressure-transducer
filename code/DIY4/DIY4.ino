@@ -73,7 +73,7 @@ RTC_DATA_ATTR char fileName[FILE_NAME_SIZE];
 
 // Track the number of times a custom error has been encountered causing the
 // device to restart.
-RTC_DATA_ATTR uint8_t restartCount = 0;
+RTC_NOINIT_ATTR uint8_t restartCount;
 
 // Store the day of the month when the current output file was created. This is
 // used to determine when a new day has started (and thus when to start a new 
@@ -352,6 +352,8 @@ void setup() {
     // powered or just woke up from deep sleep. 
     switch (esp_reset_reason()) {   
         case ESP_RST_POWERON:
+            restartCount = 0;
+            // Fallthrough to next case
         case ESP_RST_SW: {
             #if ECHO_TO_SERIAL
                 delay(500); // Wait for serial to be ready
