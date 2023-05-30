@@ -13,6 +13,11 @@
 #include "MS5803_05.h" // https://github.com/benchittle/MS5803_05, a fork of Luke Miller's repo: https://github.com/millerlp/MS5803_05
 
 
+// Wraps the error function to include line number information when called.
+#define ERROR(error_num, attemptLogging) error(error_num, __LINE__, attemptLogging)
+
+// Set to 1 to enable output of diagnostic information to the serial monitor, or
+// set to 0 to disable.
 #define ECHO_TO_SERIAL 0
 
 #define SD_CS_PIN GPIO_NUM_13 // TODO: Change this pin: FireBeetle uses it for LED
@@ -24,15 +29,26 @@
 
 // Duration in ms for each flash of the LED when displaying an error / warning.
 #define LED_FLASH_DURATION 500
+
 // Maximum number of times the device will attempt to restart on encountering an
 // error before entering an endless LED flashing loop.
 #define MAX_RESTART_COUNT 3
+
+// Maximum length of the device name in the config file.
+#define DEVICE_NAME_SIZE 7
+// Name to use for naming files if a config file cannot be found on the SD card.
+#define DEFAULT_DEVICE_NAME "DIY3-XX"
 
 // /NAME_YYYYMMDD-hhmm.data is the format.
 #define FILE_NAME_FORMAT "/%7s_%04d%02d%02d-%02d%02d.data"
 // The format specifiers take up more room than the formatted string will, so we 
 // subtract the extra space from the size. Then add room for DIY3-XX part.
 #define FILE_NAME_SIZE (sizeof(FILE_NAME_FORMAT) - 11 + 7)
+
+// Path to config file on the SD card
+#define CONFIG_FILE "/config.txt"
+// Path to file to use for logging on the SD card.
+#define LOG_FILE "/log.txt"
 
 // Number of readings (pressure and temperature) to store in a buffer before we 
 // dump to the SD card.
@@ -54,7 +70,6 @@
 // padding bytes that would align to the nearest 4 bytes. This can cause issues
 // in some cases, but the ESP32 doesn't seem to have a problem with it. By doing
 // this, we reduce the size of each entry from 12 bytes to 9 bytes.
-
 struct entry_t {
     float pressure;
     int8_t temperature;
@@ -63,10 +78,10 @@ struct entry_t {
 // Initialize a sensor object for interacting with the MS5803-05
 RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
 
-// Store the device's name (max 7 characters).
-RTC_DATA_ATTR char deviceName[8] = {0};
+// Store the device's name.
+RTC_DATA_ATTR char deviceName[DEVICE_NAME_SIZE + 1] = {0};
 // Store the name for the current data file across deep sleep restarts.
-RTC_DATA_ATTR char fileName[FILE_NAME_SIZE];
+RTC_DATA_ATTR char outputFileName[FILE_NAME_SIZE] = {0};
 
 // Track the number of times a custom error has been encountered causing the
 // device to restart.
@@ -138,19 +153,98 @@ enum diy3_error_t {
 
 
 /*
+ * NOTE: Don't call this function directly; use the ERROR macro.
  * Try to restart the device or enter an endless error loop otherwise, flashing
- * the LED in a given sequence to indicate the error.
+ * the LED in a given sequence to indicate the error. If attemptLogging == true,
+ * we attempt to write diagnostic info to a log file on the SD card. If another
+ * error is generated during this process, we ignore it and skip logging, 
+ * indicating the original error on the LED.
  */
-void error(diy3_error_t flashes) {
-    // First flash the error sequence 3 times on the LED.
+[[noreturn]] void error(diy3_error_t error_num, size_t line, bool attemptLogging = true) {
+    #if ECHO_TO_SERIAL
+        Serial.printf(
+            "\nERROR\n"
+            "Error Code: %d\n"
+            "Line #: %d\n"
+            "SD capacity: %llu B\n"
+            "SD used: %llu B\n"
+            "deviceName=%s\n"
+            "outputFileName=%s\n"
+            "restartCount=%d\n"
+            "firstSampleTimestamp=%d\n",
+            error_num, line, SD.cardSize(), SD.usedBytes(), ECHO_TO_SERIAL, 
+            MAX_RESTART_COUNT, BUFFER_SIZE, deviceName, outputFileName,
+            restartCount, firstSampleTimestamp
+        );
+        Serial.flush();
+    #endif // ECHO_TO_SERIAL
+
+    // Flash the error sequence 3 times on the LED.
     for (uint8_t i = 0; i < 3; ++i) {
-        for (uint8_t i = 0; i < flashes; ++i) {
-            digitalWrite(ERROR_LED_PIN, HIGH);
-            delay(LED_FLASH_DURATION);
-            digitalWrite(ERROR_LED_PIN, LOW);
-            delay(LED_FLASH_DURATION);
-        }
+        flash(error_num);
         delay(1000);
+    }
+
+    Serial.println("Stuff");
+    Serial.flush();
+
+    // Attempt to log data to SD card (this won't always be possible e.g. if
+    // there was an error connecting to the SD card).
+    if (attemptLogging) {
+        // First we'll try to get the time.
+        char timeString[16] = "unknown time";
+        // TODO: Fix this approach with better DS3231 lib.
+        ts timeNow = {
+            .sec = 61
+        };
+        digitalWrite(RTC_POWER_PIN, HIGH);
+        DS3231_get(&timeNow);
+
+        // If we successfully got the time from the DS3231, overwrite timeString
+        // with the actual time.
+        if (timeNow.sec != 61) {
+            snprintf(timeString, sizeof(timeString), "%04d%02d%02d %02d%02d%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+        }
+
+        // Then we'll try to open and write to a log file on the SD card
+        // TODO: Perhaps save to ESP32 flash if we can't save to SD card?
+        if (SD.begin(SD_CS_PIN)) {
+            File logFile = SD.open(LOG_FILE, FILE_APPEND, true);
+            if (logFile) {
+                #if ECHO_TO_SERIAL
+                    Serial.printf(
+                        "Logging error to file: " LOG_FILE "\n"
+                        "\tTime: %s\n",
+                        timeString
+                    );
+                    Serial.flush();
+                #endif // ECHO_TO_SERIAL
+
+                logFile.printf(
+                    "\nERROR\n"
+                    "Time: %s\n"
+                    "Error Code: %d\n"
+                    "Line #: %d\n"
+                    "SD capacity: %llu B\n"
+                    "SD used: %llu B\n"
+                    "deviceName=%s\n"
+                    "outputFileName=%s\n"
+                    "restartCount=%d\n"
+                    "firstSampleTimestamp=%d\n",
+                    timeString, error_num, line, SD.cardSize(), SD.usedBytes(),
+                    ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, deviceName,
+                    outputFileName, restartCount, firstSampleTimestamp
+                );
+
+                if (restartCount < MAX_RESTART_COUNT) {
+                    logFile.println("\nDEVICE WILL RESTART");
+                } else {
+                    logFile.println("\nDEVICE WILL NOT RESTART");
+                }
+                logFile.close();
+                SD.end();
+            }
+        }
     }
 
     // Try to restart the device.
@@ -167,28 +261,22 @@ void error(diy3_error_t flashes) {
 
     // Otherwise, continuously flash the error sequence on the LED.
     while (1) {
-        for (uint8_t i = 0; i < flashes; ++i) {
-            digitalWrite(ERROR_LED_PIN, HIGH);
-            delay(LED_FLASH_DURATION);
-            digitalWrite(ERROR_LED_PIN, LOW);
-            delay(LED_FLASH_DURATION);
-        }
+        flash(error_num);
         delay(1000);
     }
 }
 
 
 /*
- * Flash the error LED to warn the user.
+ * Flash the error LED a given number of times to warn the user.
  */
-void warning(diy3_error_t flashes) {
-    for (uint8_t i = 0; i < flashes; i++) {
+void flash(uint8_t flash_count) {
+    for (uint8_t i = 0; i < flash_count; i++) {
         digitalWrite(ERROR_LED_PIN, HIGH);
         delay(LED_FLASH_DURATION);
         digitalWrite(ERROR_LED_PIN, LOW);
         delay(LED_FLASH_DURATION);
     }
-    delay(500);
 }
 
 
@@ -352,6 +440,12 @@ void setup() {
             ulpBufOffset.val = 0;
             ulpD2Flag.val = 0;
 
+            #if ECHO_TO_SERIAL
+                delay(1000); // Give time for Serial Monitor to start listening
+                Serial.print("STARTING SETUP\nInitializing RTC... ");
+                Serial.flush();
+            #endif
+
             Wire.begin();
             // Initialize the connection with the RTC:
             // Power to the RTC is provided by a GPIO pin. Providing main power
@@ -380,7 +474,12 @@ void setup() {
             oldDay = timeNow.mday;
 
             #if ECHO_TO_SERIAL
-                printf("Time: %d-%02d-%02d %02d:%02d:%02d\n\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                Serial.printf("Done\n\tRTC Time: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                Serial.flush();
+            #endif
+
+            #if ECHO_TO_SERIAL
+                Serial.print("Starting RTC once-per-second alarm... ");
                 Serial.flush();
             #endif
 
@@ -394,55 +493,129 @@ void setup() {
             // second.
             DS3231_set_creg(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN | DS3231_CONTROL_A1IE);
 
+            #if ECHO_TO_SERIAL
+                Serial.print("Done\nInitializing SD card... ");
+                Serial.flush();
+            #endif
+
 
             // Initialize the connection with the SD card.
             if (!SD.begin(SD_CS_PIN)) {
-                #if ECHO_TO_SERIAL
-                    Serial.println(F("SD setup error"));
-                    Serial.flush();
-                #endif
-                error(sdInitError);
+                ERROR(sdInitError, false);
             }
 
-            // Get device's name from SD card or use default.
-            File config = SD.open("/config.txt", FILE_READ, false);
-            if (!config) {
-                strcpy(deviceName, "DIY3-XX");
-                warning(sdConfigWarning);
-            } else {
-                config.read((uint8_t*) deviceName, sizeof(deviceName) - 1);
-                config.close();
-            }
             #if ECHO_TO_SERIAL
-                Serial.printf("Device Name: %s\n", deviceName);
+                Serial.print("Done\nLooking for config file at " CONFIG_FILE "... ");
+                Serial.flush();
+            #endif
+
+
+            // Get device's name from SD card or use default.
+            File config = SD.open(CONFIG_FILE, FILE_READ, false);
+            if (!config) {
+                strcpy(deviceName, DEFAULT_DEVICE_NAME);
+                // TODO: Output warning to log file
+                #if ECHO_TO_SERIAL
+                    Serial.printf("Failed\nWARNING: Unable to find config file. Using default device name: %s\n", deviceName);
+                    Serial.flush();
+                #endif
+                flash(sdConfigWarning);
+            } else {
+                config.read((uint8_t*) deviceName, DEVICE_NAME_SIZE);
+                config.close();
+
+                #if ECHO_TO_SERIAL
+                    Serial.printf("Done\n\tDevice Name: %s\n");
+                    Serial.flush();
+                #endif
+            }
+
+            #if ECHO_TO_SERIAL
+                Serial.print("Creating first output file... ");
+                Serial.flush();
             #endif
             
             // Generate the first file.
-            snprintf(fileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
-            File f = SD.open(fileName, FILE_WRITE, true);
+            snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+            File f = SD.open(outputFileName, FILE_WRITE, true);
             if (!f) {
-                #if ECHO_TO_SERIAL
-                    Serial.println("Failed to create first file...");
-                #endif
-                error(sdFileError);
+                ERROR(sdFileError, true);
             }
             f.close();
-            SD.end();
+            
+            #if ECHO_TO_SERIAL
+                Serial.printf("Done\n\tFile is %s\nInitializing MS5803 pressure sensor... ", outputFileName);
+                Serial.flush();
+            #endif
 
 
             // Initialize the connection with the MS5803-05 pressure sensor.
             if (!sensor.initializeMS_5803(false)) {
-                #if ECHO_TO_SERIAL
-                    Serial.println(F("MS5803-05 sensor setup error"));
-                    Serial.flush();
-                #endif
-                error(ms5803Error);
+                ERROR(ms5803Error, true);
             }
+
+            #if ECHO_TO_SERIAL
+                Serial.print("Done\nTaking a sample sensor reading... ");
+                Serial.flush();
+
+                sensor.readSensor();
+
+                Serial.printf("Done\n\tPressure: %f mbar\tTemperature: %f deg C\n", sensor.pressure(), sensor.temperature());
+                Serial.flush();
+            #endif
+
+
+            // Write an entry to the log file with diagnostic and setup info.
+            #if ECHO_TO_SERIAL
+                Serial.print("Writing to log file... ");
+                Serial.flush();
+            #endif
+
+            File logFile = SD.open(LOG_FILE, FILE_APPEND, true);
+            if (!logFile) {
+                ERROR(sdFileError, false);
+            }
+            logFile.printf(
+                "\nSETUP COMPLETE\n"
+                "RTC Time: %d-%02d-%02d %02d:%02d:%02d\n"
+                "Sample Pressure: %f mbar\n"
+                "Sample Temp: %f deg C\n"
+                "Code uploaded on: " __DATE__ " @ " __TIME__ "\n"
+                "SD capacity: %llu B\n"
+                "SD used: %llu B\n"
+                "ECHO_TO_SERIAL=%d\n"
+                "MAX_RESTART_COUNT=%d\n"
+                "BUFFER_SIZE=%d\n"
+                "CONFIG_FILE=" CONFIG_FILE "\n"
+                "LOG_FILE=" LOG_FILE "\n"
+                "deviceName=%s\n"
+                "outputFileName=%s\n"
+                "restartCount=%d\n"
+                "firstSampleTimestamp=%d\n",
+                timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, 
+                timeNow.min, timeNow.sec, sensor.pressure(), 
+                sensor.temperature(), SD.cardSize(), SD.usedBytes(),
+                ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, deviceName,
+                outputFileName, restartCount, firstSampleTimestamp
+            );
+            logFile.close();
+            SD.end();
+
+            #if ECHO_TO_SERIAL
+                Serial.print("Done\nFlashing LED... ");
+                Serial.flush();
+            #endif
+
 
             // Flash LED's to signal successful startup.
             digitalWrite(ERROR_LED_PIN, HIGH);
             delay(3000);
             digitalWrite(ERROR_LED_PIN, LOW);
+
+            #if ECHO_TO_SERIAL
+                Serial.print("Done\nGetting updated time... ");
+                Serial.flush();
+            #endif
 
             DS3231_get(&timeNow);
             // Save a timestamp for the first sample. We'll add 1 second
@@ -450,10 +623,25 @@ void setup() {
             // taken during the next second.
             firstSampleTimestamp = timeNow.unixtime + 1;
 
+            #if ECHO_TO_SERIAL
+                Serial.printf(
+                    "Done\n"
+                    "\tTime is %d-%02d-%02d %02d:%02d:%02d\n"
+                    "Waiting for next second... ", 
+                    timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec
+                );
+                Serial.flush();
+            #endif
+
             // Wait the rest of this second to start.
-            while (timeNow.unixtime != firstSampleTimestamp) {
+            while (timeNow.unixtime < firstSampleTimestamp) {
                 DS3231_get(&timeNow);
             }
+
+            #if ECHO_TO_SERIAL
+                Serial.print("Done\nDisabling DS3231 pin power and starting ULP... ");
+                Serial.flush();
+            #endif
 
             // Disable power to the DS3231's VCC.
             digitalWrite(RTC_POWER_PIN, LOW);
@@ -462,7 +650,7 @@ void setup() {
             init_ulp();
 
             #if ECHO_TO_SERIAL
-                Serial.println("Going to sleep...");
+                Serial.println("Done\nSETUP COMPLETE\nGoing to sleep...");
                 Serial.flush();
             #endif
 
@@ -475,6 +663,7 @@ void setup() {
         }
 
         // TODO: Check if DS3231 backup battery failed and switch to main power
+        // TODO: Cleanup Serial logging / debug messages
         case ESP_RST_DEEPSLEEP: {
             #if ECHO_TO_SERIAL    
                 Serial.println("Awake!");
@@ -557,13 +746,9 @@ void setup() {
             // Open a file for logging the data. If it's the first dump of
             // the day, start a new file.
             // TODO: Write buffered data before starting new day
-            File f = SD.open(fileName, FILE_APPEND, false);
+            File f = SD.open(outputFileName, FILE_APPEND, false);
             if (!f) {
-                #if ECHO_TO_SERIAL
-                    Serial.println("Failed to open file");
-                    Serial.flush();
-                #endif
-                error(sdFileError);
+                ERROR(sdFileError, true);
             }
             // Write timestamp of first sample.
             size_t written = f.write((uint8_t*) &firstSampleTimestamp, sizeof(firstSampleTimestamp));
@@ -590,15 +775,11 @@ void setup() {
             // cycle.
             if (oldDay != timeNow.mday) {
                 // Generate a new file name with the current date and time.
-                snprintf(fileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
                 // Start a new file.
-                f = SD.open(fileName, FILE_WRITE, true);
+                f = SD.open(outputFileName, FILE_WRITE, true);
                 if (!f) {
-                    #if ECHO_TO_SERIAL
-                        Serial.println("Failed to open file");
-                        Serial.flush();
-                    #endif
-                    error(sdFileError);
+                    ERROR(sdFileError, true);
                 }
                 
                 f.close();
@@ -628,16 +809,8 @@ void setup() {
         }
 
         default: 
-            #if ECHO_TO_SERIAL
-                Serial.println("RESET REASON CASE NOT HANDLED");
-                Serial.flush();
-            #endif
-            break; // switch
+            ERROR(resetError, true);
     }
-    #if ECHO_TO_SERIAL
-        Serial.println("CONTROL LOST");
-    #endif
-    error(resetError);
 }
 
 void loop() {}
