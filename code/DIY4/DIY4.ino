@@ -577,9 +577,11 @@ void setup() {
             #if ECHO_TO_SERIAL
                 Serial.print("Done\nTaking a sample sensor reading... ");
                 Serial.flush();
+            #endif
 
-                sensor.readSensor();
+            sensor.readSensor();
 
+            #if ECHO_TO_SERIAL
                 Serial.printf("Done\n\tPressure: %f mbar\tTemperature: %f deg C\n", sensor.pressure(), sensor.temperature());
                 Serial.flush();
             #endif
@@ -667,6 +669,8 @@ void setup() {
 
             // Disable power to the DS3231's VCC.
             digitalWrite(RTC_POWER_PIN, LOW);
+           
+            restartCount = 0;
 
             // Start the ULP program.
             init_ulp();
@@ -687,6 +691,7 @@ void setup() {
         // TODO: Check if DS3231 backup battery failed and switch to main power
         // TODO: Cleanup Serial logging / debug messages
         case ESP_RST_DEEPSLEEP: {
+
             #if ECHO_TO_SERIAL    
                 Serial.println("Awake!");
                 Serial.flush();

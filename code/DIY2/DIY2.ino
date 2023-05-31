@@ -39,7 +39,7 @@
 
 // Set to 1 to have info appear on the Serial Monitor when plugged into a 
 // computer. Disable during deployment, (set to 0) in order to save battery.
-#define ECHO_TO_SERIAL 1
+#define ECHO_TO_SERIAL 0
 #define ECHO_TO_PLOT 0
 
 // This pin is used for detecting an alarm from the RTC and triggering an
@@ -151,6 +151,7 @@ void setup() {
             Serial.println(F("MS5803-14 sensor setup error"));
             Serial.flush();
         #endif
+        error(4);
     }
 
     // Take a sample pressure reading and make sure it's reasonable.
@@ -373,6 +374,10 @@ void loop() {
             logFile.write(&data, sizeof(data));
             writes++;
             if (writes >= 512 / sizeof(entry_t)) {
+                #if ECHO_TO_SERIAL
+                    Serial.println("Writing to file");
+                    Serial.flush();
+                #endif
                 logFile.sync();
                 writes = 0;
             }
