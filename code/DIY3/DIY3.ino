@@ -160,7 +160,7 @@ enum diy3_error_t {
  * error is generated during this process, we ignore it and skip logging, 
  * indicating the original error on the LED.
  */
-[[noreturn]] void error(diy3_error_t error_num, size_t line, bool attemptLogging = true) {
+[[noreturn]] void error(diy3_error_t error_num, size_t line, bool attemptLogging) {
     #if ECHO_TO_SERIAL
         Serial.printf(
             "\nERROR\n"
@@ -184,9 +184,6 @@ enum diy3_error_t {
         flash(error_num);
         delay(1000);
     }
-
-    Serial.println("Stuff");
-    Serial.flush();
 
     // Attempt to log data to SD card (this won't always be possible e.g. if
     // there was an error connecting to the SD card).
