@@ -63,6 +63,10 @@
 // Size of the buffer that the ULP will use to store raw data from the MS5803.
 #define ULP_BUFFER_SIZE (BUFFER_SIZE * ULP_SAMPLE_SIZE)
 
+// After dumping data to the SD card, we'll wait this long before shutting off 
+// power to the SD card.
+#define SD_OFF_DELAY_MS 2000
+
 // While the ULP is active, it will repeatedly run at this interval 
 // (microseconds).
 #define ULP_RUN_PERIOD 1000
@@ -151,7 +155,8 @@ enum diy4_error_t {
     sdConfigWarning,
     sdFileError,
     ms5803Error,
-    resetError
+    resetError,
+    exitedSetupError,
 };
 
 
@@ -163,7 +168,7 @@ enum diy4_error_t {
  * error is generated during this process, we ignore it and skip logging, 
  * indicating the original error on the LED.
  */
-[[noreturn]] void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
+void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
     #if ECHO_TO_SERIAL
         Serial.printf(
             "\nERROR\n"
@@ -171,6 +176,9 @@ enum diy4_error_t {
             "Line #: %d\n"
             "SD capacity: %llu B\n"
             "SD used: %llu B\n"
+            "ECHO_TO_SERIAL=%d\n"
+            "MAX_RESTART_COUNT=%d\n"
+            "BUFFER_SIZE=%d\n"
             "deviceName=%s\n"
             "outputFileName=%s\n"
             "restartCount=%d\n"
@@ -228,6 +236,9 @@ enum diy4_error_t {
                     "Line #: %d\n"
                     "SD capacity: %llu B\n"
                     "SD used: %llu B\n"
+                    "ECHO_TO_SERIAL=%d\n"
+                    "MAX_RESTART_COUNT=%d\n"
+                    "BUFFER_SIZE=%d\n"
                     "deviceName=%s\n"
                     "outputFileName=%s\n"
                     "restartCount=%d\n"
@@ -260,11 +271,11 @@ enum diy4_error_t {
         ESP.restart();
     }
 
-    // Otherwise, continuously flash the error sequence on the LED.
-    while (1) {
-        flash(error_num);
-        delay(1000);
-    }
+    // Otherwise, continuously flash the error LED and sleep.
+    digitalWrite(ERROR_LED_PIN, HIGH);
+    delay(250);
+    digitalWrite(ERROR_LED_PIN, LOW);
+    esp_deep_sleep(60 * 1000000);
 }
 
 
@@ -697,6 +708,13 @@ void setup() {
                 Serial.flush();
             #endif
 
+            if (restartCount >= MAX_RESTART_COUNT) {
+                digitalWrite(ERROR_LED_PIN, HIGH);
+                delay(250);
+                digitalWrite(ERROR_LED_PIN, LOW);
+                esp_deep_sleep(60 * 1000000);
+            }
+
             // Reinitialize connection with DS3231 before reactivating the ULP
             // to avoid interfering I2C commands.
             Wire.begin();
@@ -762,13 +780,9 @@ void setup() {
                 Serial.println("Turning on SD power");
             #endif
             digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD card power
-            //delay(2000);
+            delay(100); // Some sensors were erroring here, so maybe delay is needed?
             if (!SD.begin(SD_CS_PIN)) {
-                #if ECHO_TO_SERIAL
-                    Serial.println("Failed to reestablish SD");
-                    Serial.flush();
-                #endif
-                break;
+                ERROR(sdInitError, false);
             }
 
             #if ECHO_TO_SERIAL
@@ -821,9 +835,9 @@ void setup() {
 
             SD.end();
             #if ECHO_TO_SERIAL
-                Serial.println("Turning off SD power in 1 sec");
+                Serial.printf("Turning off SD power in %d ms... ", SD_OFF_DELAY_MS);
             #endif
-            delay(1000);
+            delay(SD_OFF_DELAY_MS);
             digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
 
             /*
@@ -834,7 +848,7 @@ void setup() {
             */
 
             #if ECHO_TO_SERIAL
-                Serial.printf("Going to sleep...\n");
+                Serial.println("Done\nGoing to sleep...");
                 Serial.flush();
             #endif
 
@@ -851,4 +865,6 @@ void setup() {
     }
 }
 
-void loop() {}
+void loop() {
+    ERROR(exitedSetupError, true);
+}
