@@ -27,6 +27,7 @@
 #include <Wire.h>
 #include <SPI.h>  // not used here, but needed to prevent a RTClib compile error
 #include "RTClib.h"
+#include "ds3231.h"
 
 
 // AVR-based Arduinos (Uno, MEGA etc) use the Wire bus for I2C
@@ -59,11 +60,13 @@ DateTime currTime;
 unsigned long millisVal;
 
 void setup() {
-	Serial.begin(57600); // adjust your serial monitor baud to 57600 to match
+	Serial.begin(9600); // adjust your serial monitor baud to 57600 to match
 	while (!Serial) {
 		; // wait for serial port to connect. Needed for Leonardo only
 	}
 	Serial.println(F("Hello"));
+  //pinMode(GPIO_NUM_26, OUTPUT);
+  //digitalWrite(GPIO_NUM_26, HIGH);
 	
 	//Wire.begin();
 	rtc.begin();  // Calls Wire.begin() internally
@@ -78,12 +81,20 @@ void setup() {
 }
 
 void loop() {
+    ts timeNow;
+
 	if (millis() > millisVal + 1000){
 		millisVal = millis(); // update millisVal
-		currTime = rtc.now(); // read current time from the rtc
-		Serial.print(F("RTC time: "));
-		char buf[] = "YYYY-MM-DD @ hh:mm:ss"; // create a character array to hold the time as a string
-		Serial.println(currTime.toString(buf)); // print the time as a string
+		//currTime = rtc.now(); // read current time from the rtc
+        DS3231_get(&timeNow);
+        char timeString[20] = {0};
+        snprintf(timeString, sizeof(timeString), "%04d-%02d-%02d %02d:%02d:%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+        Serial.print("RTC time: ");
+        Serial.println(timeString);
+
+		//char buf[] = "YYYY-MM-DD @ hh:mm:ss"; // create a character array to hold the time as a string
+		//Serial.println(currTime.toString(buf)); // print the time as a string
+        
 	}
 	// When the user has entered a date and time value in the serial 
 	// monitor and hit enter, the following section will execute.
@@ -104,9 +115,19 @@ void loop() {
 		// When the enter symbol '\n' comes along, convert the 
 		// values to a DateTime object and set the clock
 		if (Serial.read() == '\n'){
-			myTime = DateTime(myyear,mymonth,myday,myhour,myminute,mysec);
+			//myTime = DateTime(myyear,mymonth,myday,myhour,myminute,mysec);
 			Serial.println(F("Setting time"));
-			rtc.adjust(myTime);
+			//rtc.adjust(myTime);
+            
+            timeNow.year = myyear;
+            timeNow.mon = mymonth; 
+            timeNow.mday = myday;
+            timeNow.wday = 5;
+            timeNow.hour = myhour;
+            timeNow.min = myminute;
+            timeNow.sec = mysec;
+
+            DS3231_set(timeNow);
 		}
 	}
 }
