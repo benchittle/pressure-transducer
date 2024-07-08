@@ -106,7 +106,7 @@ RTC_DATA_ATTR uint32_t firstSampleTimestamp;
 
 // An array for the ULP to buffer raw sensor data while the main processor is in
 // deep sleep. Once full, the data will be processed into meaningful pressure
-// and temperature values and w.... TODO.... TODOritten to flash storage.
+// and temperature values and written to flash storage.
 RTC_DATA_ATTR ulp_var_t ulpBuffer[ULP_BUFFER_SIZE];
 // Used to index the ULP's buffer in the ULP program.
 RTC_DATA_ATTR ulp_var_t ulpBufOffset;
