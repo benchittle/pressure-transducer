@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transducer Dashboard</title>
+    <style>
+        :root {
+            --max-grid-column-width: 500px;
+        }
+        body {
+            margin: 0;
+            background-color: whitesmoke;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+        header {
+            background-color: dodgerblue;
+            color: white;
+            text-align: center;
+            padding: 0.5rem;
+
+            display: grid;
+            grid-template-columns: 1fr 2fr 1fr;
+            align-items: center;
+        }
+        header > h1 {
+            margin-top: 0.5rem;
+            margin-bottom: 0.5rem;
+            grid-column: 2 / 3;
+        }
+        header > a {
+            grid-column: 3 / 4;
+            text-decoration: none;
+            justify-self: right;
+            margin-right: 1rem;
+        }
+
+        header > a:hover {
+            text-decoration: underline;
+        }
+
+        header > a:visited {
+            color:inherit;
+        }
+
+        .grid-container {
+            margin-top: 1rem;
+
+            display: grid;
+            grid-template-columns: repeat(1, 95vw);
+            gap: 2rem;
+            /* grid-auto-flow: row; */
+            
+            justify-content: center;
+            /* align-content: center; */
+
+            /* justify-items: center; */
+        }
+
+        @media(min-width: 1100px) {
+            .grid-container {
+                grid-template-columns: repeat(2, var(--max-grid-column-width));
+            }
+        }
+        .grid-item {
+            padding: 1rem;
+            background-color: white;
+            border-radius: 1rem;
+        }
+        .grid-item > h2 {
+            color: dodgerblue;
+            margin-top: 0;
+        }
+
+        .dynamic-data {
+            font-family: 'Courier New', Courier, monospace;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Pressure Transducer Dashboard</h1>
+        <a href="https://github.com/benchittle/pressure-transducer">GitHub Repository 🡵</a>
+    </header>
+
+    <div class="grid-container">
+        <div class="grid-item device">
+            <h2>Device</h2>
+            <p>
+                Device name: <span class="dynamic-data" id="device-name">unknown</span> 
+            </p>
+            <p>
+                Connection status: <span class="dynamic-data" id="device-status">unknown</span>
+            </p>
+        </div>
+        <div class="grid-item data">
+            <h2>Data</h2>
+            <p>
+                MicroSD card capacity (bytes): <span class="dynamic-data" id="data-storage-capacity">unknown</span>
+            </p>
+            <p>
+                MicroSD card capacity used (bytes): <span class="dynamic-data" id="data-storage-used">unknown</span>
+            </p>
+        </div>
+        <div class="grid-item clock">
+            <h2>Clock</h2>
+            <p>
+                Onboard clock time: <time class="dynamic-data" id="clock-onboard">unknown</time>
+            </p>
+
+            <input type="radio" id="clock-from-system" name="set-clock" checked onclick="disableClockInput();">
+            <label for="clock-from-system">Set onboard clock from browser clock</label>
+            <br>
+            <input type="radio" id="clock-from-custom" name="set-clock" onclick="enableClockInput();">
+            <label for="clock-from-custom">Set onboard clock from custom time</label>
+            <br>
+            <input type="datetime-local" step="1" id="clock-input" disabled>
+            <button onclick="setOnboardClock();">Set onboad clock</button>
+        </div>
+        <div class="grid-item sensor">
+            <h2>Sensor</h2>
+            <p>
+                Pressure (mbar): <span class="dynamic-data" id="sensor-pressure">unknown</span>
+            </p>
+            <p>
+                Temperature (°C): <span class="dynamic-data" id="sensor-temperature">unknown</span>
+            </p>
+            <button onclick="updateSensorSection();">Update</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", initDashboard);
+        setInterval(async () => populateClockSection(await getOnboardClockEpochSec()), 500);
+        
+        async function initDashboard() {
+            await fetch("/api/all")
+                .catch(error => console.log(error))
+                .then(response => response.json())
+                .catch(error => console.log(error))
+                .then(data => {
+                    populateDeviceSection(data["device_name"]);
+                    populateDataSection(data["storage_capacity"], data["storage_used"]);
+                    populateClockSection(data["clock_time"]);
+                    populateSensorSection(data["sensor_pressure"], data["sensor_temperature"]);
+                })
+                .catch(error => console.log(error));
+        }
+        
+        function populateDeviceSection(device_name) {
+            document.getElementById("device-name").textContent = device_name;
+        }
+
+        function populateDataSection(storage_capacity, storage_used) {
+            document.getElementById("data-storage-capacity").textContent = storage_capacity;
+            document.getElementById("data-storage-used").textContent = storage_used + " (" + (storage_used / storage_capacity * 100).toString().slice(0, 4) + "%)";
+        }
+
+        function populateClockSection(onboard_time_epoch_sec) {
+            if (!document.getElementById("clock-from-custom").checked) {
+                updateClockInput()
+            }
+            const onboard_datetime = new Date(onboard_time_epoch_sec * 1000);
+            // Create time string in form YYYY-MM-DD hh:mm:ss
+            const onboard_time_string = onboard_datetime.getUTCFullYear() + "-" 
+                + ("0"+ (onboard_datetime.getUTCMonth() + 1)).slice(-2) + "-" 
+                + ("0" + onboard_datetime.getUTCDate()).slice(-2) + " " 
+                + ("0" + onboard_datetime.getUTCHours()).slice(-2) + ":" 
+                + ("0" + onboard_datetime.getUTCMinutes()).slice(-2) + ":"
+                + ("0" + onboard_datetime.getUTCSeconds()).slice(-2);
+
+            var onboard_clock_display = document.getElementById("clock-onboard");
+            onboard_clock_display.setAttribute("datetime", onboard_datetime.toISOString());
+            onboard_clock_display.textContent = onboard_time_string;
+        }
+
+        function populateSensorSection(pressure, temperature) {
+            document.getElementById("sensor-pressure").textContent = pressure;
+            document.getElementById("sensor-temperature").textContent = temperature;
+        }
+
+        // Set the value of the input section to the browser's current time
+        function updateClockInput() {
+            var now = new Date();
+            now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+            document.getElementById("clock-input").value = now.toISOString().slice(0,19);
+        }
+
+        async function setOnboardClock() {
+            const time_string_iso = document.getElementById("clock-input").value + "Z";
+            // Not necessarily the actual GMT time, but it doesn't matter since 
+            // we're just working in local time.
+            const time_epoch_sec = new Date(time_string_iso).getTime() / 1000;
+            // const time_string_custom = ("0" + time.getDate()).slice(-2) + "-" + ("0"+(d.getMonth()+1)).slice(-2) + "-" +
+            // d.getFullYear() + " " + ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+            // console.log(time.getTime() / 1000)
+            console.log("Sending clock update request with epoch time " + time_epoch_sec + " (" + time_string_iso + ")")
+            await fetch("/api/clock", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "text/plain", 
+                    },
+                    body: time_epoch_sec.toString(),
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error("Error in setOnboardClock response: " + response.statusText)
+                    }
+                })
+                .catch(error => console.log(error));
+        }
+
+        async function getOnboardClockEpochSec() {
+            return await fetch("/api/clock")
+                .then(response => response.json())
+                .then(data => (data["clock_time"]) ? data["clock_time"] : 0)
+                .catch(error => console.log(error));
+        }
+
+        function enableClockInput() {
+            document.getElementById("clock-input").disabled = false;
+        }
+
+        function disableClockInput() {
+            document.getElementById("clock-input").disabled = true;
+            updateClockInput();
+        }
+
+        async function updateSensorSection() {
+            await fetch("/api/sensor")
+                .then(response => response.json())
+                .then(data => populateSensorSection(data["sensor_pressure"], data["sensor_temperature"]))
+                .catch(error => console.log(error));
+        }
+    </script>
+</body>
+</html>
