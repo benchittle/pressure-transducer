@@ -1,3 +1,4 @@
+// == Base Function == //
 #include <FS.h>
 #include <SD.h>
 #include <SPI.h>
@@ -11,6 +12,17 @@
 // Additional includes for peripheral devices
 #include "ds3231.h" // https://github.com/rodan/ds3231
 #include "MS5803_05.h" // https://github.com/benchittle/MS5803_05, a fork of Luke Miller's repo: https://github.com/millerlp/MS5803_05
+// =================== //
+
+// == WiFi Dashboard == //
+#include <WiFi.h>
+#include <DNSServer.h>
+
+#include "ArduinoHttpServer.h" // https://github.com/QuickSander/ArduinoHttpServer
+
+// HTML for the dashboard page encoded as a byte array.
+#include "index_html.h"
+// ==================== //
 
 
 // Wraps the error function to include line number information when called.
@@ -28,7 +40,8 @@
 #define RTC_ALARM_PIN GPIO_NUM_25 //D2
 #define ULP_SCL_PIN GPIO_NUM_0 // D5
 #define ULP_SDA_PIN GPIO_NUM_14 // D6
-#define ERROR_LED_PIN GPIO_NUM_2
+#define ERROR_LED_PIN GPIO_NUM_2 // D9
+#define BUTTON_PIN GPIO_NUM_27 // D4
 
 // Duration in ms for each flash of the LED when displaying an error / warning.
 #define LED_FLASH_DURATION 500
@@ -70,6 +83,13 @@
 // While the ULP is active, it will repeatedly run at this interval 
 // (microseconds).
 #define ULP_RUN_PERIOD 1000
+
+#define WIFI_SERVER_PORT 80
+#define DNS_SERVER_PORT 53
+// Domain at which the WiFi dashboard can be reached after connecting to the 
+// ESP's WiFi. 
+#define DASHBOARD_DOMAIN "dashboard.lan"
+#define HTTP_REQUEST_MAX_BODY_SIZE 512
 
 
 // A custom struct to store a single data entry.
@@ -146,6 +166,9 @@ RTC_DATA_ATTR ulp_var_t ulp_i2c_write_clearAlarm[] = {
     HULP_I2C_CMD_1B(0x0)
 };
 
+WiFiServer wifiServer;
+DNSServer dnsServer;
+
 
 // Error codes for the program. The value associated with each enum is also the
 // number of times the error LED will flash if an error is encountered.
@@ -157,6 +180,8 @@ enum diy4_error_t {
     ms5803Error,
     resetError,
     exitedSetupError,
+    wifiApSetupError,
+    dnsSetupError
 };
 
 
@@ -296,7 +321,7 @@ void flash(uint8_t flash_count) {
  * Define the ULP program, configure the ULP appropriately, and upload the 
  * program to the ULP. 
  */ 
-void init_ulp()
+void initUlp()
 {
     // Define labels used in the ULP program.
     enum {
@@ -428,6 +453,7 @@ void init_ulp()
 
 
 void setup() {
+    bool buttonPressed = false;
     #if ECHO_TO_SERIAL
         Serial.begin(115200);
     #else
@@ -444,12 +470,16 @@ void setup() {
     pinMode(RTC_POWER_PIN, OUTPUT);
     pinMode(RTC_ALARM_PIN, INPUT_PULLUP);
     pinMode(ERROR_LED_PIN, OUTPUT);
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
 
     // Jump to the appropriate code depending on whether the ESP32 was just 
     // powered or just woke up from deep sleep. 
     switch (esp_reset_reason()) {   
         case ESP_RST_POWERON:
             restartCount = 0;
+            if (digitalRead(BUTTON_PIN) == LOW) {
+                buttonPressed = true;
+            }
             // Fallthrough to next case
         case ESP_RST_SW: {
             ulpBufOffset.val = 0;
@@ -632,7 +662,9 @@ void setup() {
                 outputFileName, restartCount, firstSampleTimestamp
             );
             logFile.close();
-            SD.end();
+            if (!buttonPressed) {
+                SD.end();
+            }
 
             #if ECHO_TO_SERIAL
                 Serial.print("Done\nFlashing LED... ");
@@ -644,6 +676,14 @@ void setup() {
             digitalWrite(ERROR_LED_PIN, HIGH);
             delay(3000);
             digitalWrite(ERROR_LED_PIN, LOW);
+
+            if (buttonPressed) {
+                #if ECHO_TO_SERIAL
+                    Serial.print("Done\nButton press was recorded, entering server mode\n");
+                    Serial.flush();
+                #endif
+                runServer();          
+            }
 
             #if ECHO_TO_SERIAL
                 Serial.print("Done\nDisabling SD card power and getting updated time... ");
@@ -684,7 +724,7 @@ void setup() {
             restartCount = 0;
 
             // Start the ULP program.
-            init_ulp();
+            initUlp();
 
             #if ECHO_TO_SERIAL
                 Serial.println("Done\nSETUP COMPLETE\nGoing to sleep...");
@@ -741,7 +781,7 @@ void setup() {
             // it can run in parallel with the main program as we process the
             // raw data.
             ulpBufOffset.val = 0;
-            init_ulp();
+            initUlp();
 
 
             // Buffer to store the processed data that will be written to flash.
@@ -867,4 +907,242 @@ void setup() {
 
 void loop() {
     ERROR(exitedSetupError, true);
+}
+
+void runServer() {
+    // Reset CPU frequency to default so WiFi stuff functions properly.
+    setCpuFrequencyMhz(240);
+
+    #if ECHO_TO_SERIAL
+        Serial.print("Setting up WiFi access point... ");
+        Serial.flush();
+    #endif
+    if (WiFi.softAP(deviceName)) {
+        #if ECHO_TO_SERIAL
+            Serial.print("Done\n");
+            Serial.flush();
+        #endif
+    } else {
+        #if ECHO_TO_SERIAL
+            Serial.print("Failed\n");
+            Serial.flush();
+        #endif
+        ERROR(wifiApSetupError, 1);
+    }
+
+    #if ECHO_TO_SERIAL
+        Serial.print("Setting up WiFi server... ");
+        Serial.flush();
+    #endif
+    wifiServer = WiFiServer(WIFI_SERVER_PORT);
+    wifiServer.begin();
+    #if ECHO_TO_SERIAL
+        Serial.print("Done\nSetting up DNS server... ");
+        Serial.flush();
+    #endif
+    if (dnsServer.start(DNS_SERVER_PORT, DASHBOARD_DOMAIN, WiFi.softAPIP())) {
+        #if ECHO_TO_SERIAL
+            Serial.print("Done\nBeginning server loop\n");
+            Serial.flush();
+        #endif
+    } else {
+        #if ECHO_TO_SERIAL
+            Serial.print("Failed\n");
+            Serial.flush();
+        #endif
+        ERROR(dnsSetupError, 1);
+    }
+    
+    while(1) {
+        serverLoop();
+    }
+}
+
+void serverLoop() {
+    dnsServer.processNextRequest();
+
+    WiFiClient client = wifiServer.available(); 
+    if (client) {
+        #if ECHO_TO_SERIAL
+            Serial.print("Client connected\n");
+            Serial.flush();
+        #endif
+        ArduinoHttpServer::StreamHttpRequest<HTTP_REQUEST_MAX_BODY_SIZE> httpRequest(client);
+        if (httpRequest.readRequest()) {
+            const String& resource = httpRequest.getResource().toString();
+            #if ECHO_TO_SERIAL
+                Serial.print("\tReceived HTTP request\n");
+                char* method;
+                switch(httpRequest.getMethod()) {
+                    case ArduinoHttpServer::Method::Get: method = "GET"; break;
+                    case ArduinoHttpServer::Method::Put: method = "PUT"; break;
+                    case ArduinoHttpServer::Method::Post: method = "POST"; break;
+                    case ArduinoHttpServer::Method::Head: method = "HEAD"; break;
+                    case ArduinoHttpServer::Method::Delete: method = "DELETE"; break;
+                    default: method = "INVALID";
+                }
+                Serial.printf(
+                    "\t\tMethod: %s\n"
+                    "\t\tResource: %s\n"
+                    "\t\tBody: %s\n", 
+                    method, resource.c_str(), httpRequest.getBody()
+                );
+                Serial.flush();
+            #endif
+            switch (httpRequest.getMethod()) {
+                case ArduinoHttpServer::Method::Get:
+                {
+                    if (resource == "/") {
+                        ArduinoHttpServer::StreamHttpReply(client, "text/html").send(index_html);
+                        #if ECHO_TO_SERIAL
+                            Serial.print("\tSent reply with code 200\n");
+                            Serial.flush();
+                        #endif
+                    }
+                    else if (resource == "/api/clock") {
+                        struct ts timeNow;
+                        DS3231_get(&timeNow);
+
+                        char json[64];
+                        snprintf(json, sizeof(json), "{\"clock_time\": %d}\n", timeNow.unixtime);
+
+                        ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
+                        #if ECHO_TO_SERIAL
+                            Serial.print("\tSent reply with code 200\n");
+                            Serial.flush();
+                        #endif
+                    } else if (resource == "/api/sensor") {
+                        sensor.readSensor();
+
+                        char json[64];
+                        snprintf(
+                            json, 
+                            sizeof(json), 
+                            "{\"sensor_pressure\": %.1f, \"sensor_temperature\": %.1f}",
+                            sensor.pressure(), sensor.temperature()
+                        );
+
+                        ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
+                        #if ECHO_TO_SERIAL
+                            Serial.print("\tSent reply with code 200\n");
+                            Serial.flush();
+                        #endif
+                    } else if (resource == "/api/all") {
+                        struct ts timeNow;
+                        DS3231_get(&timeNow);
+                        sensor.readSensor();
+
+                        char json[512];
+                        snprintf(
+                            json, 
+                            sizeof(json), 
+                            "{" 
+                                "\"device_name\": \"%s\","
+                                "\"storage_capacity\": %llu,"
+                                "\"storage_used\": %llu,"
+                                "\"clock_time\": %ld,"
+                                "\"sensor_pressure\": %.1f," 
+                                "\"sensor_temperature\": %.1f"
+                            "}",
+                            deviceName,
+                            SD.cardSize(), 
+                            SD.usedBytes(), 
+                            timeNow.unixtime,
+                            sensor.pressure(), 
+                            sensor.temperature()
+                        );
+
+                        ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
+                        #if ECHO_TO_SERIAL
+                            Serial.print("\tSent reply with code 200\n");
+                            Serial.flush();
+                        #endif
+                    } else {
+                        ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
+                        #if ECHO_TO_SERIAL
+                            Serial.print("\tSent reply with code 404\n");
+                            Serial.flush();
+                        #endif
+                    }
+                    break;
+                }
+                case ArduinoHttpServer::Method::Post: {
+                    if (resource == "/api/clock") {
+                        const char *const body = httpRequest.getBody();
+                        uintmax_t epoch_time = strtoumax(body, NULL, 10);
+                        if (epoch_time == 0) {
+                            #if ECHO_TO_SERIAL
+                                Serial.println("\tError: Invalid time string in http body");
+                                Serial.flush();
+                            #endif
+                            ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "422").send("");
+                            #if ECHO_TO_SERIAL
+                                Serial.print("\tSent reply with code 422\n");
+                                Serial.flush();
+                            #endif
+                            break;
+                        } else if (epoch_time > std::numeric_limits<time_t>::max()) {
+                            #if ECHO_TO_SERIAL
+                                Serial.println("\tError: Time given is too large to set onboard clock");
+                                Serial.flush();
+                            #endif
+                            ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "422").send("");
+                            #if ECHO_TO_SERIAL
+                                Serial.print("\tSent reply with code 422\n");
+                                Serial.flush();
+                            #endif
+                            break;
+                        }
+                        time_t converted_epoch_time = static_cast<time_t>(epoch_time);
+                        struct tm *time = localtime(&converted_epoch_time);
+
+                        struct ts rtc_time = {
+                            .sec = time->tm_sec,
+                            .min = time->tm_min,
+                            .hour = time->tm_hour,
+                            .mday = time->tm_mday,
+                            .mon = time->tm_mon + 1,      // tm uses 0 based month while ts is 1 based
+                            .year = time->tm_year + 1900, // tm uses years since 1900 while ts requires the actual year
+                            .wday = time->tm_wday,
+                            .yday = time->tm_yday,
+                        };
+                        DS3231_set(rtc_time);
+                        #if ECHO_TO_SERIAL
+                            Serial.print("\tClock updated\n");
+                            Serial.flush();
+                        #endif
+
+                        ArduinoHttpServer::StreamHttpReply(client, "text/plain").send("");
+                        #if ECHO_TO_SERIAL
+                            Serial.print("\tSent reply with code 200\n");
+                            Serial.flush();
+                        #endif
+                    } else {
+                        ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
+                        #if ECHO_TO_SERIAL
+                            Serial.print("\tSent reply with code 404\n");
+                            Serial.flush();
+                        #endif
+                    }
+                    break;
+                }
+                default:
+                    ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "501").send("");
+                    #if ECHO_TO_SERIAL
+                        Serial.print("\tSent reply with code 501\n");
+                        Serial.flush();
+                    #endif
+            }
+        } else {
+            #if ECHO_TO_SERIAL
+                Serial.print("\tFailed to read incoming request\n");
+                Serial.flush();
+            #endif
+        }
+        client.stop();
+        #if ECHO_TO_SERIAL
+            Serial.print("Client disconnected\n");
+            Serial.flush();
+        #endif
+    }
 }
