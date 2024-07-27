@@ -873,8 +873,6 @@ void loop() {
     ERROR(exitedSetupError, true);
 }
 
-
-
 void runServer() {
     // Reset CPU frequency to default so WiFi stuff functions properly.
     setCpuFrequencyMhz(240);
@@ -918,7 +916,7 @@ void runServer() {
         #endif
         ERROR(dnsSetupError, 1);
     }
-    
+    digitalWrite(ERROR_LED_PIN, HIGH);
     while(1) {
         serverLoop();
     }

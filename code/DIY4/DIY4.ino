@@ -952,7 +952,7 @@ void runServer() {
         #endif
         ERROR(dnsSetupError, 1);
     }
-    
+    digitalWrite(ERROR_LED_PIN, HIGH);
     while(1) {
         serverLoop();
     }
