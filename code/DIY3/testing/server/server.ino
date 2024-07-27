@@ -2,15 +2,15 @@
 #include <FS.h>
 #include <SD.h>
 #include <WiFi.h>
+#include <DNSServer.h>
 
-// #define ARDUINO_HTTP_SERVER_DEBUG
 #include "ArduinoHttpServer.h" // https://github.com/QuickSander/ArduinoHttpServer
 #include "ds3231.h"            // https://github.com/rodan/ds3231
 #include "MS5803_05.h" // https://github.com/benchittle/MS5803_05, a fork of Luke Miller's repo: https://github.com/millerlp/MS5803_05
 
 #include "index_html.h"
 
-#define SD_CS_PIN GPIO_NUM_13 // TODO: Change this pin: FireBeetle uses it for LED
+#define SD_CS_PIN GPIO_NUM_13 // D7
 #define RTC_POWER_PIN GPIO_NUM_26 // D3
 #define RTC_ALARM_PIN GPIO_NUM_25 // D2
 
@@ -18,7 +18,11 @@
 #define DEFAULT_DEVICE_NAME "DIY3-XX"
 #define DEVICE_NAME_SIZE 7
 
+#define DASHBOARD_DOMAIN "dashboard.lan"
+
 char deviceName[DEVICE_NAME_SIZE + 1] = {0};
+
+DNSServer dnsServer;
 
 // Initialize a sensor object for interacting with the MS5803-05
 RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
@@ -65,14 +69,20 @@ void setup() {
 
     // WiFi setup
     Serial.print("Setting AP (Access Point)...");
+    // WiFi.setHostname(HOSTNAME);
+    // WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
+    // WiFi.softAPsetHostname(HOSTNAME);
+    // WiFi.mode(WIFI_MODE_AP);
     WiFi.softAP(ssid, password); // CHECK SUCCESS
 
     server.begin();
+    dnsServer.start(53, DASHBOARD_DOMAIN, WiFi.softAPIP());
 }
 
 void loop() {
-    WiFiClient client = server.available(); 
+    dnsServer.processNextRequest();
 
+    WiFiClient client = server.available(); 
     if (client) {
         ArduinoHttpServer::StreamHttpRequest<512> httpRequest(client);
         if (httpRequest.readRequest()) {
@@ -81,7 +91,7 @@ void loop() {
             case ArduinoHttpServer::Method::Get:
             {
                 if (resource == "/") {
-                    ArduinoHttpServer::StreamHttpReply(client, "text/html").send(reinterpret_cast<char *>(index_html));
+                    ArduinoHttpServer::StreamHttpReply(client, "text/html").send(index_html);
                 }
                 else if (resource == "/api/clock") {
                     Serial.println("Getting time");
@@ -135,6 +145,8 @@ void loop() {
                     );
 
                     ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
+                } else {
+                    ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
                 }
                 break;
             }
@@ -168,12 +180,15 @@ void loop() {
                     Serial.println("Done setting time");
 
                     ArduinoHttpServer::StreamHttpReply(client, "text/plain").send("");
+                } else {
+                    ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
                 }
                 break;
             }
             default:
                 // unsupported method
                 Serial.println("Error: Unsupported HTTP method");
+                ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "501").send("");
             }
         }
         client.stop();
