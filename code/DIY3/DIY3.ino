@@ -88,6 +88,8 @@
 #define DASHBOARD_DOMAIN "dashboard.lan"
 #define HTTP_REQUEST_MAX_BODY_SIZE 512
 
+#define SERVER_MODE_LED_FLASH_PERIOD_MS 50
+
 
 // A custom struct to store a single data entry.
 // NOTE: __attribute__((packed)) tells the compiler not to add additional 
@@ -131,6 +133,8 @@ RTC_DATA_ATTR ulp_var_t ulpBufOffset;
 // been read.
 RTC_DATA_ATTR ulp_var_t ulpD2Flag;
 
+RTC_DATA_ATTR bool buttonPressed = false;
+
 // The following variables are used by HULP macros to communicate via bitbanged
 // I2C.
 
@@ -166,6 +170,8 @@ RTC_DATA_ATTR ulp_var_t ulp_i2c_write_clearAlarm[] = {
 WiFiServer wifiServer;
 DNSServer dnsServer;
 
+bool toggleLed = false;
+
 
 // Error codes for the program. The value associated with each enum is also the
 // number of times the error LED will flash if an error is encountered.
@@ -177,6 +183,7 @@ enum diy3_error_t {
     ms5803Error,
     resetError,
     exitedSetupError,
+
     wifiApSetupError,
     dnsSetupError
 };
@@ -190,6 +197,7 @@ enum diy3_error_t {
  * error is generated during this process, we ignore it and skip logging, 
  * indicating the original error on the LED.
  */
+[[noreturn]]
 void error(diy3_error_t error_num, size_t line, bool attemptLogging) {
     #if ECHO_TO_SERIAL
         Serial.printf(
@@ -292,11 +300,12 @@ void error(diy3_error_t error_num, size_t line, bool attemptLogging) {
         ESP.restart();
     }
 
-    // Otherwise, continuously flash the error LED and sleep.
+    // Otherwise, continuously flash the error LED and sleep. When we wake up,
+    // code in the setup function identical to the following will run.
     digitalWrite(ERROR_LED_PIN, HIGH);
     delay(250);
     digitalWrite(ERROR_LED_PIN, LOW);
-    esp_deep_sleep(60 * 1000000);
+    esp_deep_sleep(60 * (uint32_t) 1000000);
 }
 
 
@@ -446,9 +455,72 @@ void initUlp()
     ESP_ERROR_CHECK(hulp_ulp_run(0));
 }
 
+void IRAM_ATTR buttonInterrupt() {
+    buttonPressed = true;
+}
+
+void IRAM_ATTR serverModeLedToggleInterrupt() {
+    toggleLed = true;
+}
+
+/* 
+ * Deinitialize peripherals and put the device into deep sleep. The LED will 
+ * remain on once it is safe to disconnect power.
+ * Note: This is not a general purpose shutdown function, and it does not shut
+ * down peripherals that are already expected to be disabled / not in use (e.g. 
+ * the SD card) in the intended use case. It will:
+ * - stop the ULP from running again
+ * - reconfigure the RTC to stop generating alarms and disable its pin power
+ * - put the ESP32 to deepsleep
+ */ 
+[[noreturn]]
+void shutdown() {
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    #if ECHO_TO_SERIAL
+        Serial.println("Shutting down...\n\tStopping ULP");
+        Serial.flush();
+    #endif
+    // Stop ULP after it finishes next cycle.
+    hulp_ulp_end();
+
+    #if ECHO_TO_SERIAL
+        Serial.println("\tDeinitializing RTC");
+        Serial.flush();
+    #endif
+    // Enable power to RTC
+    digitalWrite(RTC_POWER_PIN, HIGH);
+    // Wait to make sure RTC is on and ULP is done using I2C.
+    delay(1000); 
+
+    // Disable the RTC
+    Wire.begin();
+    // Set default values in control register and disable 32khz output. This
+    // will also stop the alarm from pulsing when battery powered. 
+    DS3231_init(DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
+    // Clear any previous alarms.
+    DS3231_clear_a1f();
+    DS3231_clear_a2f();
+    Wire.end();
+    digitalWrite(RTC_POWER_PIN, LOW);
+
+    // Turn on the LED to signal power can be removed. This function is used to
+    // keep the LED on during deep sleep.
+    hulp_configure_pin(ERROR_LED_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, HIGH);
+
+    #if ECHO_TO_SERIAL
+        Serial.println("Done\nPower can be turned off safely");
+        Serial.flush();
+    #endif
+
+    // Keep LED on during sleep.
+    hulp_peripherals_on();
+    // Sleep forever (the ULP is disabled so it won't wake us up).
+    esp_sleep_enable_ulp_wakeup();
+    esp_deep_sleep_start();
+}
 
 void setup() {
-    bool buttonPressed = false;
+    bool buttonPressedAtStartup = false;
     #if ECHO_TO_SERIAL
         Serial.begin(115200);
     #else
@@ -464,6 +536,12 @@ void setup() {
     pinMode(RTC_ALARM_PIN, INPUT_PULLUP);
     pinMode(ERROR_LED_PIN, OUTPUT);
     pinMode(BUTTON_PIN, INPUT_PULLUP);
+    // After setup, the button can be used to safely "shut down" the ESP32 and 
+    // disable active peripherals.
+    attachInterrupt(BUTTON_PIN, buttonInterrupt, FALLING);
+    // Using ext1 instead of ext0 because of a bug that prevents ext0 and ULP
+    // interrupts from being used together.
+    esp_sleep_enable_ext1_wakeup(((uint64_t) 0b1) << BUTTON_PIN, ESP_EXT1_WAKEUP_ALL_LOW);
 
     // Jump to the appropriate code depending on whether the ESP32 was just 
     // powered or just woke up from deep sleep. 
@@ -471,7 +549,11 @@ void setup() {
         case ESP_RST_POWERON: 
             restartCount = 0;
             if (digitalRead(BUTTON_PIN) == LOW) {
-                buttonPressed = true;
+                buttonPressedAtStartup = true;
+                #if ECHO_TO_SERIAL
+                    Serial.println("Button press detected at startup. Device will enter server mode after initializing");
+                    Serial.flush();
+                #endif
             }
             // Fallthrough to next case
         case ESP_RST_SW: {
@@ -497,11 +579,9 @@ void setup() {
             // startup. 
             delay(1000); 
 
-            // Set BBSQW (battery backed square wave) bit in DS3231 control 
-            // register. This allows us to generate alarm pulses while the chip
-            // is powered only by battery. Also set other default values.
+            // Set default values in control register and disable 32khz output.
             // TODO: Need a way to make sure this succeeds.
-            DS3231_init(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
+            DS3231_init(DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN);
             // Clear any previous alarms.
             DS3231_clear_a1f();
             DS3231_clear_a2f();
@@ -516,26 +596,33 @@ void setup() {
                 Serial.flush();
             #endif
 
+            // Only start the alarm if we aren't going into server mode.
+            if (!buttonPressedAtStartup) {
+                #if ECHO_TO_SERIAL
+                    Serial.print("Starting RTC once-per-second alarm... ");
+                    Serial.flush();
+                #endif
+
+                // Start the once-per-second alarm on the DS3231:
+                // These flags set the alarm to be in once-per-second mode.
+                const uint8_t flags[] = {1,1,1,1,0};
+                // Set the alarm. The time value doesn't matter in once-per-second
+                // mode.
+                DS3231_set_a1(1, 1, 1, 1, flags);
+                // Enable the alarm. It will now bring the RTC_ALARM_PIN GPIO low every
+                // second.
+                DS3231_set_creg(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN | DS3231_CONTROL_A1IE);
+
+                #if ECHO_TO_SERIAL
+                    Serial.print("Done\n");
+                #endif
+            }
+
+
             #if ECHO_TO_SERIAL
-                Serial.print("Starting RTC once-per-second alarm... ");
+                Serial.print("Initializing SD card... ");
                 Serial.flush();
             #endif
-
-            // Start the once-per-second alarm on the DS3231:
-            // These flags set the alarm to be in once-per-second mode.
-            const uint8_t flags[] = {1,1,1,1,0};
-            // Set the alarm. The time value doesn't matter in once-per-second
-            // mode.
-            DS3231_set_a1(1, 1, 1, 1, flags);
-            // Enable the alarm. It will now bring the RTC_ALARM_PIN GPIO low every
-            // second.
-            DS3231_set_creg(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN | DS3231_CONTROL_A1IE);
-
-            #if ECHO_TO_SERIAL
-                Serial.print("Done\nInitializing SD card... ");
-                Serial.flush();
-            #endif
-
 
             // Initialize the connection with the SD card.
             if (!SD.begin(SD_CS_PIN)) {
@@ -639,7 +726,9 @@ void setup() {
                 outputFileName, restartCount, firstSampleTimestamp
             );
             logFile.close();
-            if (!buttonPressed) {
+
+            // Don't disconnect from SD if we're going into server mode.
+            if (!buttonPressedAtStartup) {
                 SD.end();
             }
 
@@ -654,9 +743,9 @@ void setup() {
             delay(3000);
             digitalWrite(ERROR_LED_PIN, LOW);
             
-            if (buttonPressed) {
+            if (buttonPressedAtStartup) {
                 #if ECHO_TO_SERIAL
-                    Serial.print("Done\nButton press was recorded, entering server mode\n");
+                    Serial.println("Done\nEntering server mode");
                     Serial.flush();
                 #endif
                 runServer();          
@@ -707,7 +796,7 @@ void setup() {
             #endif
 
             // Allow the ULP to trigger the ESP32 to wake up.
-            esp_sleep_enable_ulp_wakeup();
+            ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
             // Enter deep sleep.
             esp_deep_sleep_start();
 
@@ -717,17 +806,23 @@ void setup() {
         // TODO: Check if DS3231 backup battery failed and switch to main power
         // TODO: Cleanup Serial logging / debug messages
         case ESP_RST_DEEPSLEEP: {
-
             #if ECHO_TO_SERIAL    
                 Serial.println("Awake!");
                 Serial.flush();
             #endif
 
+            // If several errors have occurred previously, continue sleeping.
             if (restartCount >= MAX_RESTART_COUNT) {
                 digitalWrite(ERROR_LED_PIN, HIGH);
                 delay(250);
                 digitalWrite(ERROR_LED_PIN, LOW);
-                esp_deep_sleep(60 * 1000000);
+                esp_deep_sleep(60 * (uint32_t) 1000000);
+            }
+            
+            // If the shutdown button was pushed while the device was in deep 
+            // sleep, stop sampling and shut down.
+            switch(esp_sleep_get_wakeup_cause()) {
+                case ESP_SLEEP_WAKEUP_EXT1: shutdown();
             }
 
             // Reinitialize connection with DS3231 before reactivating the ULP
@@ -745,8 +840,8 @@ void setup() {
             uint8_t alarmStatus = digitalRead(RTC_ALARM_PIN);
 
             // Disable power to the RTC.
-            digitalWrite(RTC_POWER_PIN, LOW);
             Wire.end();
+            digitalWrite(RTC_POWER_PIN, LOW);
 
 
             // Make a copy of the raw data in the ULP's buffer.
@@ -844,27 +939,27 @@ void setup() {
 
             SD.end();
 
-            /*
             #if ECHO_TO_SERIAL
-                Serial.printf("Buffer: %d \tTime: %d-%02d-%02d %02d:%02d:%02d \tPressure: %f \tTemp: %d\n", bufferCount, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec, sensor.pressure(), (int8_t) sensor.temperature());
+                Serial.println("Going to sleep...");
                 Serial.flush();
             #endif
-            */
 
-            #if ECHO_TO_SERIAL
-                Serial.printf("Going to sleep...\n");
-                Serial.flush();
-            #endif
+            if (buttonPressed) {
+                shutdown();
+            }
 
             // Allow the ULP to trigger the ESP32 to wake up.
-            esp_sleep_enable_ulp_wakeup();
+            ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
+
             // Enter deep sleep.
             esp_deep_sleep_start();
-
-            break; // switch (we don't actually reach this because of sleep)
         }
 
         default: 
+            #if ECHO_TO_SERIAL
+                Serial.printf("Wakeup reason: %d\n", esp_reset_reason());
+                Serial.flush();
+            #endif
             ERROR(resetError, true);
     }
 }
@@ -916,9 +1011,42 @@ void runServer() {
         #endif
         ERROR(dnsSetupError, 1);
     }
-    digitalWrite(ERROR_LED_PIN, HIGH);
+
+    hw_timer_t* timer0 = timerBegin(0, 80, true);
+    timerAttachInterrupt(timer0, serverModeLedToggleInterrupt, true);
+    timerAlarmWrite(timer0, SERVER_MODE_LED_FLASH_PERIOD_MS * 1000, true);
+    timerAlarmEnable(timer0);
+
+    buttonPressed = false;
     while(1) {
         serverLoop();
+        if (toggleLed) {
+            if (digitalRead(ERROR_LED_PIN) == LOW) {
+                digitalWrite(ERROR_LED_PIN, HIGH);
+            } else {
+                digitalWrite(ERROR_LED_PIN, LOW);
+            }
+            toggleLed = false;
+        }
+        if (buttonPressed) {
+            #if ECHO_TO_SERIAL
+                Serial.print("Stopping DNS and WiFi server... ");
+                Serial.flush();
+            #endif
+            dnsServer.stop();
+            wifiServer.stopAll();
+            #if ECHO_TO_SERIAL
+                Serial.print("Done\nStopping WiFi... ");
+                Serial.flush();
+            #endif
+            WiFi.mode(WIFI_OFF);
+            #if ECHO_TO_SERIAL
+                Serial.println("Done\nStopping LED timer and shutting down");
+                Serial.flush();
+            #endif
+            timerAlarmDisable(timer0);
+            shutdown();
+        }
     }
 }
 
