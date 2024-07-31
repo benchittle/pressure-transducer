@@ -47,10 +47,10 @@
 // error before entering an endless LED flashing loop.
 #define MAX_RESTART_COUNT 3
 
-// Maximum length of the device name in the config file.
-#define DEVICE_NAME_SIZE 7
 // Name to use for naming files if a config file cannot be found on the SD card.
 #define DEFAULT_DEVICE_NAME "DIY3-XX"
+// Maximum length of the device name in the config file.
+#define DEVICE_NAME_SIZE sizeof(DEFAULT_DEVICE_NAME)
 
 // /NAME_YYYYMMDD-hhmm.data is the format.
 #define FILE_NAME_FORMAT "/%7s_%04d%02d%02d-%02d%02d.data"
@@ -60,8 +60,18 @@
 
 // Path to config file on the SD card
 #define CONFIG_FILE "/config.txt"
-// Path to file to use for logging on the SD card.
-#define LOG_FILE "/log.txt"
+
+// A log file will be created on the SD card for capturing diagnostics and 
+// errors. If the SD card has a config.txt file with a device name, the log
+// will be at /devicename.log. Otherwise, the log file will be based on the
+// default device name /DIY3-XX.log.
+#define LOG_FILE_NAME_PREFIX "/"
+#define LOG_FILE_NAME_SUFFIX ".log"
+#define DEFAULT_LOG_FILE_NAME LOG_FILE_NAME_PREFIX DEFAULT_DEVICE_NAME LOG_FILE_NAME_SUFFIX
+#define LOG_FILE_NAME_SIZE ((sizeof(DEFAULT_LOG_FILE_NAME) >= sizeof(LOG_FILE_NAME_PREFIX LOG_FILE_NAME_SUFFIX) + DEVICE_NAME_SIZE - 1) ? \
+    sizeof(DEFAULT_LOG_FILE_NAME): \
+    sizeof(LOG_FILE_NAME_PREFIX LOG_FILE_NAME_SUFFIX) + DEVICE_NAME_SIZE - 1)
+
 
 // Number of readings (pressure and temperature) to store in a buffer before we 
 // dump to the SD card.
@@ -105,9 +115,11 @@ struct entry_t {
 RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
 
 // Store the device's name.
-RTC_DATA_ATTR char deviceName[DEVICE_NAME_SIZE + 1] = {0};
+RTC_DATA_ATTR char deviceName[DEVICE_NAME_SIZE] = {0};
 // Store the name for the current data file across deep sleep restarts.
 RTC_DATA_ATTR char outputFileName[FILE_NAME_SIZE] = {0};
+// Store the name for the log file.
+RTC_DATA_ATTR char logFileName[LOG_FILE_NAME_SIZE] = DEFAULT_LOG_FILE_NAME;
 
 // Track the number of times a custom error has been encountered causing the
 // device to restart.
@@ -199,6 +211,10 @@ enum diy3_error_t {
  */
 [[noreturn]]
 void error(diy3_error_t error_num, size_t line, bool attemptLogging) {
+    // Disable ULP wakeups
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    // Stop ULP after it finishes next cycle.
+    hulp_ulp_end();
     #if ECHO_TO_SERIAL
         Serial.printf(
             "\nERROR\n"
@@ -235,6 +251,7 @@ void error(diy3_error_t error_num, size_t line, bool attemptLogging) {
         ts timeNow = {
             .sec = 61
         };
+        Wire.begin();
         digitalWrite(RTC_POWER_PIN, HIGH);
         DS3231_get(&timeNow);
 
@@ -247,13 +264,13 @@ void error(diy3_error_t error_num, size_t line, bool attemptLogging) {
         // Then we'll try to open and write to a log file on the SD card
         // TODO: Perhaps save to ESP32 flash if we can't save to SD card?
         if (SD.begin(SD_CS_PIN)) {
-            File logFile = SD.open(LOG_FILE, FILE_APPEND, true);
+            File logFile = SD.open(logFileName, FILE_APPEND, true);
             if (logFile) {
                 #if ECHO_TO_SERIAL
                     Serial.printf(
-                        "Logging error to file: " LOG_FILE "\n"
+                        "Logging error to file: %s\n"
                         "\tTime: %s\n",
-                        timeString
+                        logFileName, timeString
                     );
                     Serial.flush();
                 #endif // ECHO_TO_SERIAL
@@ -296,16 +313,21 @@ void error(diy3_error_t error_num, size_t line, bool attemptLogging) {
             digitalWrite(ERROR_LED_PIN, LOW);
             delay(LED_FLASH_DURATION / 4);
         }
+        #if ECHO_TO_SERIAL
+            Serial.println("Restarting");
+            Serial.flush();
+        #endif
         ++restartCount;
         ESP.restart();
+    } else {
+        #if ECHO_TO_SERIAL
+            Serial.println("Max restart count reached. Going into endless deep sleep");
+            Serial.flush();
+        #endif
+        // Otherwise, go into endless deep sleep.
+        esp_sleep_enable_ulp_wakeup();
+        esp_deep_sleep_start();
     }
-
-    // Otherwise, continuously flash the error LED and sleep. When we wake up,
-    // code in the setup function identical to the following will run.
-    digitalWrite(ERROR_LED_PIN, HIGH);
-    delay(250);
-    digitalWrite(ERROR_LED_PIN, LOW);
-    esp_deep_sleep(60 * (uint32_t) 1000000);
 }
 
 
@@ -562,7 +584,7 @@ void setup() {
 
             #if ECHO_TO_SERIAL
                 delay(1000); // Give time for Serial Monitor to start listening
-                Serial.print("STARTING SETUP\nInitializing RTC... ");
+                Serial.print("STARTING SETUP\nCode uploaded on " __DATE__ " @ " __TIME__ "\nInitializing RTC... ");
                 Serial.flush();
             #endif
 
@@ -639,18 +661,20 @@ void setup() {
             File config = SD.open(CONFIG_FILE, FILE_READ, false);
             if (!config) {
                 strcpy(deviceName, DEFAULT_DEVICE_NAME);
-                // TODO: Output warning to log file
+                strcpy(logFileName, DEFAULT_LOG_FILE_NAME);
                 #if ECHO_TO_SERIAL
                     Serial.printf("Failed\nWARNING: Unable to find config file. Using default device name: %s\n", deviceName);
                     Serial.flush();
                 #endif
                 flash(sdConfigWarning);
             } else {
-                config.read((uint8_t*) deviceName, DEVICE_NAME_SIZE);
+                config.read((uint8_t*) deviceName, DEVICE_NAME_SIZE - 1);
                 config.close();
 
+                snprintf(logFileName, LOG_FILE_NAME_SIZE, LOG_FILE_NAME_PREFIX "%s" LOG_FILE_NAME_SUFFIX, deviceName);
+
                 #if ECHO_TO_SERIAL
-                    Serial.printf("Done\n\tDevice Name: %s\n", deviceName);
+                    Serial.printf("Done\n\tDevice Name: %s\tLog File Name: %s\n", deviceName, logFileName);
                     Serial.flush();
                 #endif
             }
@@ -698,7 +722,7 @@ void setup() {
                 Serial.flush();
             #endif
 
-            File logFile = SD.open(LOG_FILE, FILE_APPEND, true);
+            File logFile = SD.open(logFileName, FILE_APPEND, true);
             if (!logFile) {
                 ERROR(sdFileError, false);
             }
@@ -714,7 +738,7 @@ void setup() {
                 "MAX_RESTART_COUNT=%d\n"
                 "BUFFER_SIZE=%d\n"
                 "CONFIG_FILE=" CONFIG_FILE "\n"
-                "LOG_FILE=" LOG_FILE "\n"
+                "logFileName=%s\n"
                 "deviceName=%s\n"
                 "outputFileName=%s\n"
                 "restartCount=%d\n"
@@ -722,9 +746,10 @@ void setup() {
                 timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, 
                 timeNow.min, timeNow.sec, sensor.pressure(), 
                 sensor.temperature(), SD.cardSize(), SD.usedBytes(),
-                ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, deviceName,
-                outputFileName, restartCount, firstSampleTimestamp
+                ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, logFileName,
+                deviceName, outputFileName, restartCount, firstSampleTimestamp
             );
+            
             logFile.close();
 
             // Don't disconnect from SD if we're going into server mode.
@@ -799,8 +824,6 @@ void setup() {
             ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
             // Enter deep sleep.
             esp_deep_sleep_start();
-
-            break; // switch (we shouldn't actually reach this because of sleep)
         }
 
         // TODO: Check if DS3231 backup battery failed and switch to main power
@@ -810,14 +833,6 @@ void setup() {
                 Serial.println("Awake!");
                 Serial.flush();
             #endif
-
-            // If several errors have occurred previously, continue sleeping.
-            if (restartCount >= MAX_RESTART_COUNT) {
-                digitalWrite(ERROR_LED_PIN, HIGH);
-                delay(250);
-                digitalWrite(ERROR_LED_PIN, LOW);
-                esp_deep_sleep(60 * (uint32_t) 1000000);
-            }
             
             // If the shutdown button was pushed while the device was in deep 
             // sleep, stop sampling and shut down.
@@ -877,7 +892,8 @@ void setup() {
 
             // Save the buffer to flash:
             #if ECHO_TO_SERIAL
-                Serial.printf("Dumping to card...\nt=%d\nP\t\tT\n", firstSampleTimestamp);
+                Serial.printf("RTC Time Now: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                Serial.printf("Dumping to card...\nFirst Timestamp=%d\nP\tT\n", firstSampleTimestamp);
                 for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
                     printf("%.2f \t%u\n", writeBuffer[i].pressure, writeBuffer[i].temperature);
                 }
