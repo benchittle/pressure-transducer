@@ -7,6 +7,6 @@
 [submodule "code/idf-test/DIY4/components/arduino_libraries/MS5803_05"]
 	path = code/idf-test/DIY4/components/arduino_libraries/MS5803_05
 	url = https://github.com/benchittle/MS5803_05
-[submodule "code/idf-test/DIY4/components/arduino_libraries/ArduinoHttpServer"]
-	path = code/idf-test/DIY4/components/arduino_libraries/ArduinoHttpServer
-	url = https://github.com/QuickSander/ArduinoHttpServer
+[submodule "code/idf-test/DIY4/components/arduino_libraries/base64_arduino"]
+	path = code/idf-test/DIY4/components/arduino_libraries/base64_arduino
+	url = https://github.com/Densaugeo/base64_arduino
