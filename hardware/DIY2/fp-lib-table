@@ -1,3 +1,0 @@
-(fp_lib_table
-  (lib (name Breakouts)(type KiCad)(uri ${KIPRJMOD}/PressureTransducerDIY_Breakouts.pretty)(options "")(descr ""))
-)

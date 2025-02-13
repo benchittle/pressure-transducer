@@ -1,4 +1,0 @@
-(sym_lib_table
-  (lib (name Breakouts)(type Legacy)(uri C:/Users/Ben2020/Documents/GitHub/pressure_transducer/hardware/DIY/PressureTransducerDIY/PressureTransducerDIY_Breakouts.lib)(options "")(descr ""))
-  (lib (name PressureTransducerDIY-rescue)(type Legacy)(uri ${KIPRJMOD}/PressureTransducerDIY-rescue.lib)(options "")(descr ""))
-)
