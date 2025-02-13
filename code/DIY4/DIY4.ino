@@ -499,7 +499,7 @@ void IRAM_ATTR serverModeLedToggleInterrupt() {
  * - reconfigure the RTC to stop generating alarms and disable its pin power
  * - put the ESP32 to deepsleep
  */ 
-[[noreturn]]
+// [[noreturn]]
 void shutdown() {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     #if ECHO_TO_SERIAL
@@ -1062,10 +1062,9 @@ void runServer() {
         ERROR(dnsSetupError, 1);
     }
 
-    hw_timer_t* timer0 = timerBegin(0, 80, true);
-    timerAttachInterrupt(timer0, serverModeLedToggleInterrupt, true);
-    timerAlarmWrite(timer0, SERVER_MODE_LED_FLASH_PERIOD_MS * 1000, true);
-    timerAlarmEnable(timer0);
+    hw_timer_t* timer0 = timerBegin(1000000);
+    timerAttachInterrupt(timer0, serverModeLedToggleInterrupt);
+    timerAlarm(timer0, SERVER_MODE_LED_FLASH_PERIOD_MS * 1000, true, 0);
 
     buttonPressed = false;
     while(1) {
@@ -1084,9 +1083,8 @@ void runServer() {
                 Serial.flush();
             #endif
             dnsServer.stop();
-            wifiServer.stopAll();
+            wifiServer.stop();
             #if ECHO_TO_SERIAL
-                Serial.print("Done\nStopping WiFi... ");
                 Serial.flush();
             #endif
             WiFi.mode(WIFI_OFF);
@@ -1094,7 +1092,7 @@ void runServer() {
                 Serial.println("Done\nStopping LED timer and shutting down");
                 Serial.flush();
             #endif
-            timerAlarmDisable(timer0);
+            timerEnd(timer0);
             shutdown();
         }
     }
@@ -1103,7 +1101,7 @@ void runServer() {
 void serverLoop() {
     dnsServer.processNextRequest();
 
-    WiFiClient client = wifiServer.available(); 
+    WiFiClient client = wifiServer.accept(); 
     if (client) {
         #if ECHO_TO_SERIAL
             Serial.print("Client connected\n");
