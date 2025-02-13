@@ -1,12 +1,18 @@
 #include "Arduino.h"
 // == Base Function == //
-#include <FS.h>
-#include <SD.h>
+// #include <FS.h>
+// #include <SD.h>
+#include <string.h>
+#include <sys/unistd.h>
+#include <sys/stat.h>
+
+#include "esp_vfs_fat.h"
+#include "sdmmc_cmd.h"
+// #include "driver/sdspi_host.h"
+
 #include <SPI.h>
 #include <Wire.h>
 #include <esp32/ulp.h>
-
-// #include "ulp_stuff.h"
 
 // ULP macro programming utility functions.
 // https://github.com/boarchuz/HULP
@@ -18,10 +24,10 @@
 // =================== //
 
 // == WiFi Dashboard == //
-#include <WiFi.h>
-#include <DNSServer.h>
+// #include <WiFi.h>
+// #include <DNSServer.h>
 
-#include "ArduinoHttpServer.h" // https://github.com/QuickSander/ArduinoHttpServer
+// #include "ArduinoHttpServer.h" // https://github.com/QuickSander/ArduinoHttpServer
 
 // HTML for the dashboard page encoded as a byte array.
 #include "index_html.h"
@@ -39,6 +45,9 @@
 // definitions here.
 #define SD_CS_PIN GPIO_NUM_13 // D7 
 #define SD_SWITCH_PIN GPIO_NUM_15 // A4
+#define SD_MOSI_PIN GPIO_NUM_23     
+#define SD_MISO_PIN GPIO_NUM_19
+#define SD_SCK_PIN GPIO_NUM_18
 #define RTC_POWER_PIN GPIO_NUM_26 // D3
 #define RTC_ALARM_PIN GPIO_NUM_25 //D2
 #define ULP_SCL_PIN GPIO_NUM_0 // D5
@@ -53,25 +62,28 @@
 // error before entering an endless LED flashing loop.
 #define MAX_RESTART_COUNT 3
 
+// Mount point for the SD card
+#define SD_MOUNT_POINT "/sd"
+
 // Name to use for naming files if a config file cannot be found on the SD card.
 #define DEFAULT_DEVICE_NAME "DIY4-XX"
 // Maximum length of the device name in the config file.
 #define DEVICE_NAME_SIZE sizeof(DEFAULT_DEVICE_NAME)
 
 // /NAME_YYYYMMDD-hhmm.data is the format.
-#define FILE_NAME_FORMAT "/%7s_%04d%02d%02d-%02d%02d.data"
+#define FILE_NAME_FORMAT SD_MOUNT_POINT "/%7s_%04d%02d%02d-%02d%02d.data"
 // The format specifiers take up more room than the formatted string will, so we 
 // subtract the extra space from the size. Then add room for DIY4-XX part.
-#define FILE_NAME_SIZE (sizeof(FILE_NAME_FORMAT) - 11 + 7)
+#define FILE_NAME_SIZE (sizeof(FILE_NAME_FORMAT) - 11 + 8)
 
 // Path to config file on the SD card
-#define CONFIG_FILE "/config.txt"
+#define CONFIG_FILE SD_MOUNT_POINT "/config.txt"
 
 // A log file will be created on the SD card for capturing diagnostics and 
 // errors. If the SD card has a config.txt file with a device name, the log
 // will be at /devicename.log. Otherwise, the log file will be based on the
 // default device name /DIY3-XX.log.
-#define LOG_FILE_NAME_PREFIX "/"
+#define LOG_FILE_NAME_PREFIX SD_MOUNT_POINT "/"
 #define LOG_FILE_NAME_SUFFIX ".log"
 #define DEFAULT_LOG_FILE_NAME LOG_FILE_NAME_PREFIX DEFAULT_DEVICE_NAME LOG_FILE_NAME_SUFFIX
 #define LOG_FILE_NAME_SIZE ((sizeof(DEFAULT_LOG_FILE_NAME) >= sizeof(LOG_FILE_NAME_PREFIX LOG_FILE_NAME_SUFFIX) + DEVICE_NAME_SIZE - 1) ? \
@@ -105,6 +117,8 @@
 
 #define SERVER_MODE_LED_FLASH_PERIOD_MS 50
 
+static const char* TAG = "DIY4";
+
 
 // A custom struct to store a single data entry.
 // NOTE: __attribute__((packed)) tells the compiler not to add additional 
@@ -115,6 +129,11 @@ struct entry_t {
     float pressure;
     int8_t temperature;
 } __attribute__((packed));
+
+// Globals for SD card
+sdmmc_card_t* card;
+sdspi_device_config_t sdspi_device_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+char mountPoint[] = SD_MOUNT_POINT;
 
 // Initialize a sensor object for interacting with the MS5803-05
 RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
@@ -184,8 +203,8 @@ RTC_DATA_ATTR ulp_var_t ulp_i2c_write_clearAlarm[] = {
     HULP_I2C_CMD_1B(0x0)
 };
 
-WiFiServer wifiServer;
-DNSServer dnsServer;
+// WiFiServer wifiServer;
+// DNSServer dnsServer;
 
 bool toggleLed = false;
 
@@ -207,6 +226,19 @@ enum diy4_error_t {
 
 
 /*
+ * Flash the error LED a given number of times to warn the user.
+ */
+void flash(uint8_t flash_count) {
+    for (uint8_t i = 0; i < flash_count; i++) {
+        digitalWrite(ERROR_LED_PIN, HIGH);
+        delay(LED_FLASH_DURATION);
+        digitalWrite(ERROR_LED_PIN, LOW);
+        delay(LED_FLASH_DURATION);
+    }
+}
+
+
+/*
  * NOTE: Don't call this function directly; use the ERROR macro.
  * Try to restart the device or enter an endless error loop otherwise, flashing
  * the LED in a given sequence to indicate the error. If attemptLogging == true,
@@ -225,16 +257,17 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
             "\nERROR\n"
             "Error Code: %d\n"
             "Line #: %d\n"
-            "SD capacity: %llu B\n"
-            "SD used: %llu B\n"
+            // "SD capacity: %llu B\n"
+            // "SD used: %llu B\n"
             "ECHO_TO_SERIAL=%d\n"
             "MAX_RESTART_COUNT=%d\n"
             "BUFFER_SIZE=%d\n"
             "deviceName=%s\n"
             "outputFileName=%s\n"
             "restartCount=%d\n"
-            "firstSampleTimestamp=%d\n",
-            error_num, line, SD.cardSize(), SD.usedBytes(), ECHO_TO_SERIAL, 
+            "firstSampleTimestamp=%ld\n",
+            //error_num, line, SD.cardSize(), SD.usedBytes(), ECHO_TO_SERIAL, 
+            error_num, line, ECHO_TO_SERIAL, 
             MAX_RESTART_COUNT, BUFFER_SIZE, deviceName, outputFileName,
             restartCount, firstSampleTimestamp
         );
@@ -263,52 +296,52 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
         // If we successfully got the time from the DS3231, overwrite timeString
         // with the actual time.
         if (timeNow.sec != 61) {
-            snprintf(timeString, sizeof(timeString), "%04d%02d%02d %02d%02d%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+            snprintf(timeString, sizeof(timeString), "%04d%02d%02d %02d%02d%02d", timeNow.year % 10000u, timeNow.mon % 100u, timeNow.mday % 100u, timeNow.hour % 100u, timeNow.min % 100u, timeNow.sec % 100u);
         }
 
         // Then we'll try to open and write to a log file on the SD card
         // TODO: Perhaps save to ESP32 flash if we can't save to SD card?
         digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD power
-        if (SD.begin(SD_CS_PIN)) {
-            File logFile = SD.open(logFileName, FILE_APPEND, true);
-            if (logFile) {
-                #if ECHO_TO_SERIAL
-                    Serial.printf(
-                        "Logging error to file: %s\n"
-                        "\tTime: %s\n",
-                        logFileName, timeString
-                    );
-                    Serial.flush();
-                #endif // ECHO_TO_SERIAL
+        // if (SD.begin(SD_CS_PIN)) {
+        //     File logFile = SD.open(logFileName, FILE_APPEND, true);
+        //     if (logFile) {
+        //         #if ECHO_TO_SERIAL
+        //             Serial.printf(
+        //                 "Logging error to file: %s\n"
+        //                 "\tTime: %s\n",
+        //                 logFileName, timeString
+        //             );
+        //             Serial.flush();
+        //         #endif // ECHO_TO_SERIAL
 
-                logFile.printf(
-                    "\nERROR\n"
-                    "Time: %s\n"
-                    "Error Code: %d\n"
-                    "Line #: %d\n"
-                    "SD capacity: %llu B\n"
-                    "SD used: %llu B\n"
-                    "ECHO_TO_SERIAL=%d\n"
-                    "MAX_RESTART_COUNT=%d\n"
-                    "BUFFER_SIZE=%d\n"
-                    "deviceName=%s\n"
-                    "outputFileName=%s\n"
-                    "restartCount=%d\n"
-                    "firstSampleTimestamp=%d\n",
-                    timeString, error_num, line, SD.cardSize(), SD.usedBytes(),
-                    ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, deviceName,
-                    outputFileName, restartCount, firstSampleTimestamp
-                );
+        //         logFile.printf(
+        //             "\nERROR\n"
+        //             "Time: %s\n"
+        //             "Error Code: %d\n"
+        //             "Line #: %d\n"
+        //             "SD capacity: %llu B\n"
+        //             "SD used: %llu B\n"
+        //             "ECHO_TO_SERIAL=%d\n"
+        //             "MAX_RESTART_COUNT=%d\n"
+        //             "BUFFER_SIZE=%d\n"
+        //             "deviceName=%s\n"
+        //             "outputFileName=%s\n"
+        //             "restartCount=%d\n"
+        //             "firstSampleTimestamp=%ld\n",
+        //             timeString, error_num, line, SD.cardSize(), SD.usedBytes(),
+        //             ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, deviceName,
+        //             outputFileName, restartCount, firstSampleTimestamp
+        //         );
 
-                if (restartCount < MAX_RESTART_COUNT) {
-                    logFile.println("\nDEVICE WILL RESTART");
-                } else {
-                    logFile.println("\nDEVICE WILL NOT RESTART");
-                }
-                logFile.close();
-                SD.end();
-            }
-        }
+        //         if (restartCount < MAX_RESTART_COUNT) {
+        //             logFile.println("\nDEVICE WILL RESTART");
+        //         } else {
+        //             logFile.println("\nDEVICE WILL NOT RESTART");
+        //         }
+        //         logFile.close();
+        //         SD.end();
+        //     }
+        // }
     }
 
     // Try to restart the device.
@@ -333,19 +366,6 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
         // Otherwise, go into endless deep sleep.
         esp_sleep_enable_ulp_wakeup();
         esp_deep_sleep_start();
-    }
-}
-
-
-/*
- * Flash the error LED a given number of times to warn the user.
- */
-void flash(uint8_t flash_count) {
-    for (uint8_t i = 0; i < flash_count; i++) {
-        digitalWrite(ERROR_LED_PIN, HIGH);
-        delay(LED_FLASH_DURATION);
-        digitalWrite(ERROR_LED_PIN, LOW);
-        delay(LED_FLASH_DURATION);
     }
 }
 
@@ -513,7 +533,7 @@ void IRAM_ATTR serverModeLedToggleInterrupt() {
  * - reconfigure the RTC to stop generating alarms and disable its pin power
  * - put the ESP32 to deepsleep
  */ 
-// [[noreturn]]
+[[noreturn]]
 void shutdown() {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     #if ECHO_TO_SERIAL
@@ -559,7 +579,78 @@ void shutdown() {
     esp_deep_sleep_start();
 }
 
+bool sdInit() {
+    esp_err_t ret;
+
+    // Options for mounting the filesystem.
+    // If format_if_mount_failed is set to true, SD card will be partitioned and
+    // formatted in case when mounting fails.
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+    ESP_LOGI(TAG, "Initializing SD card");
+
+    // Use settings defined above to initialize SD card and mount FAT filesystem.
+    // Note: esp_vfs_fat_sdmmc/sdspi_mount is all-in-one convenience functions.
+    // Please check its source code and implement error recovery when developing
+    // production applications.
+    ESP_LOGI(TAG, "Using SPI peripheral");
+
+    // By default, SD card frequency is initialized to SDMMC_FREQ_DEFAULT (20MHz)
+    // For setting a specific frequency, use host.max_freq_khz (range 400kHz - 20MHz for SDSPI)
+    // Example: for fixed frequency of 10MHz, use host.max_freq_khz = 10000;
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+
+    spi_bus_config_t bus_cfg = {
+        .mosi_io_num = SD_MOSI_PIN,
+        .miso_io_num = SD_MISO_PIN,
+        .sclk_io_num = SD_SCK_PIN,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 4000,
+    };
+
+    ret = spi_bus_initialize((spi_host_device_t) host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize bus.");
+        return false;
+    }
+
+    // This initializes the slot without card detect (CD) and write protect (WP) signals.
+    // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_config.gpio_cs = SD_CS_PIN;
+    slot_config.host_id = (spi_host_device_t) host.slot;
+
+    ESP_LOGI(TAG, "Mounting filesystem");
+    ret = esp_vfs_fat_sdspi_mount(mountPoint, &host, &slot_config, &mount_config, &card);
+
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount filesystem. "
+                     "If you want the card to be formatted, set the CONFIG_EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.");
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize the card (%s). "
+                     "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(ret));
+        }
+        return false;
+    }
+    ESP_LOGI(TAG, "Filesystem mounted");
+
+    // Card has been initialized, print its properties
+    // sdmmc_card_print_info(stdout, card);
+    return true;
+}
+
+void sdDeinit() {
+    esp_vfs_fat_sdcard_unmount(mountPoint, card);
+    spi_bus_free(sdspi_device_config.host_id);
+}
+
 void setup() {
+    esp_err_t ret;
      bool buttonPressedAtStartup = false;
     #if ECHO_TO_SERIAL
         Serial.begin(115200);
@@ -571,7 +662,7 @@ void setup() {
         setCpuFrequencyMhz(10);     
     #endif
 
-    pinMode(SD_CS_PIN, OUTPUT);
+    // pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
     pinMode(SD_SWITCH_PIN, OUTPUT);
     pinMode(RTC_POWER_PIN, OUTPUT);
@@ -593,19 +684,19 @@ void setup() {
             if (digitalRead(BUTTON_PIN) == LOW) {
                 buttonPressedAtStartup = true;
                 #if ECHO_TO_SERIAL
-                    Serial.println("Button press detected at startup. Device will enter server mode after initializing");
-                    Serial.flush();
+                    ESP_LOGI(TAG, "Button press detected at startup. Device will enter server mode after initializing");
+                    // Serial.flush();
                 #endif
             }
-            // Fallthrough to next case
+            [[fallthrough]];
         case ESP_RST_SW: {
             ulpBufOffset.val = 0;
             ulpD2Flag.val = 0;
 
             #if ECHO_TO_SERIAL
-                delay(1000); // Give time for Serial Monitor to start listening
-                Serial.print("STARTING SETUP\nCode uploaded on " __DATE__ " @ " __TIME__ "\nInitializing RTC... ");
-                Serial.flush();
+                // delay(1000); // Give time for Serial Monitor to start listening
+                ESP_LOGI(TAG, "STARTING SETUP\nCode uploaded on " __DATE__ " @ " __TIME__ "\nInitializing RTC... ");
+                // Serial.flush();
             #endif
 
             Wire.begin();
@@ -634,30 +725,30 @@ void setup() {
             oldDay = timeNow.mday;
 
             #if ECHO_TO_SERIAL
-                Serial.printf("Done\n\tRTC Time: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
-                Serial.flush();
+                ESP_LOGI(TAG, "Done\n\tRTC Time: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                // Serial.flush();
             #endif
 
             // TODO: Check Status register as well, as it indicates if time was 
             // set since powered on (See #1)
             if (timeNow.year < 2023) {
                 #if ECHO_TO_SERIAL
-                    Serial.println("WARNING: Time is out of date. Setting year to 2000 for UNIX time compatibility...");
-                    Serial.flush();
+                    ESP_LOGW(TAG, "WARNING: Time is out of date. Setting year to 2000 for UNIX time compatibility...\n");
+                    // Serial.flush();
                 #endif
                 timeNow.year = 2000;
                 DS3231_set(timeNow);
                 #if ECHO_TO_SERIAL
-                    Serial.printf("Done\n\tNew RTC Time: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
-                    Serial.flush();
+                    ESP_LOGI(TAG, "Done\n\tNew RTC Time: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                    // Serial.flush();
                 #endif
             }
 
             // Only start the alarm if we aren't going into server mode.
             if (!buttonPressedAtStartup) {
                 #if ECHO_TO_SERIAL
-                    Serial.print("Starting RTC once-per-second alarm... ");
-                    Serial.flush();
+                    ESP_LOGI(TAG, "Starting RTC once-per-second alarm... ");
+                    // Serial.flush();
                 #endif
 
                 // Start the once-per-second alarm on the DS3231:
@@ -671,41 +762,50 @@ void setup() {
                 DS3231_set_creg(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN | DS3231_CONTROL_A1IE);
 
                 #if ECHO_TO_SERIAL
-                    Serial.print("Done\n");
+                    ESP_LOGI(TAG, "Done\n");
                 #endif
             }
 
 
             #if ECHO_TO_SERIAL
-                Serial.print("Initializing SD card... ");
-                Serial.flush();
+                ESP_LOGI(TAG, "Initializing SD card... ");
+                // Serial.flush();
             #endif
 
+            sdInit();
+
+            // Card has been initialized, print its properties
+            sdmmc_card_print_info(stdout, card);
+
             // Initialize the connection with the SD card.
-            digitalWrite(SD_SWITCH_PIN, LOW);
-            if (!SD.begin(SD_CS_PIN)) {
-                ERROR(sdInitError, false);
-            }
+            // digitalWrite(SD_SWITCH_PIN, LOW);
+            // if (!SD.begin(SD_CS_PIN)) {
+            //     ERROR(sdInitError, false);
+            // }
 
             #if ECHO_TO_SERIAL
-                Serial.print("Done\nLooking for config file at " CONFIG_FILE "... ");
-                Serial.flush();
+                ESP_LOGI(TAG, "Done\nLooking for config file at " CONFIG_FILE "... ");
+                // Serial.flush();
             #endif
 
 
             // Get device's name from SD card or use default.
-            File config = SD.open(CONFIG_FILE, FILE_READ, false);
-            if (!config) {
+            FILE* config = fopen(CONFIG_FILE, "r");
+            if (config == NULL) {
                 strcpy(deviceName, DEFAULT_DEVICE_NAME);
                 strcpy(logFileName, DEFAULT_LOG_FILE_NAME);
                 #if ECHO_TO_SERIAL
-                    Serial.printf("Failed\nWARNING: Unable to find config file. Using default device name: %s\n", deviceName);
-                    Serial.flush();
+                    ESP_LOGI(TAG, "Failed\nWARNING: Unable to find config file. Using default device name: %s\n", deviceName);
+                    // Serial.flush();
                 #endif
                 flash(sdConfigWarning);
             } else {
-                config.read((uint8_t*) deviceName, DEVICE_NAME_SIZE - 1);
-                config.close();
+                // CHECK RETURN VALUE
+                fgets(deviceName, DEVICE_NAME_SIZE, config);
+                // config.read((uint8_t*) deviceName, DEVICE_NAME_SIZE - 1);
+                // config.close();
+                fclose(config);
+                config = NULL;
 
                 snprintf(logFileName, LOG_FILE_NAME_SIZE, LOG_FILE_NAME_PREFIX "%s" LOG_FILE_NAME_SUFFIX, deviceName);
 
@@ -721,12 +821,15 @@ void setup() {
             #endif
             
             // Generate the first file.
-            snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
-            File f = SD.open(outputFileName, FILE_WRITE, true);
-            if (!f) {
+            snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year % 10000, timeNow.mon % 100, timeNow.mday % 100, timeNow.hour % 100, timeNow.min % 100);
+            
+            ESP_LOGI(TAG, "Attempting to open file: %s", outputFileName);
+            FILE* f = fopen(outputFileName, "w");
+            if (f == NULL) {
                 ERROR(sdFileError, true);
             }
-            f.close();
+            fclose(f);
+            f = NULL;
 
             #if ECHO_TO_SERIAL
                 Serial.printf("Done\n\tFile is %s\nInitializing MS5803 pressure sensor... ", outputFileName);
@@ -758,18 +861,18 @@ void setup() {
                 Serial.flush();
             #endif
 
-            File logFile = SD.open(logFileName, FILE_APPEND, true);
+            FILE* logFile = fopen(logFileName, "a");
             if (!logFile) {
                 ERROR(sdFileError, false);
             }
-            logFile.printf(
+            fprintf(logFile,
                 "\nSETUP COMPLETE\n"
                 "RTC Time: %d-%02d-%02d %02d:%02d:%02d\n"
                 "Sample Pressure: %f mbar\n"
                 "Sample Temp: %f deg C\n"
                 "Code uploaded on: " __DATE__ " @ " __TIME__ "\n"
-                "SD capacity: %llu B\n"
-                "SD used: %llu B\n"
+                // "SD capacity: %llu B\n"
+                // "SD used: %llu B\n"
                 "ECHO_TO_SERIAL=%d\n"
                 "MAX_RESTART_COUNT=%d\n"
                 "BUFFER_SIZE=%d\n"
@@ -778,18 +881,20 @@ void setup() {
                 "deviceName=%s\n"
                 "outputFileName=%s\n"
                 "restartCount=%d\n"
-                "firstSampleTimestamp=%d\n",
+                "firstSampleTimestamp=%ld\n",
                 timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, 
                 timeNow.min, timeNow.sec, sensor.pressure(), 
-                sensor.temperature(), SD.cardSize(), SD.usedBytes(),
+                // sensor.temperature(), SD.cardSize(), SD.usedBytes(),
+                sensor.temperature(),
                 ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, logFileName,
                 deviceName, outputFileName, restartCount, firstSampleTimestamp
             );
 
-            logFile.close();
+            fclose(logFile);
+            logFile = NULL;
 
             if (!buttonPressedAtStartup) {
-                SD.end();
+                sdDeinit();
             }
 
             #if ECHO_TO_SERIAL
@@ -808,7 +913,7 @@ void setup() {
                     Serial.println("Done\nEntering server mode");
                     Serial.flush();
                 #endif
-                runServer();          
+                // runServer();          
             }
 
             #if ECHO_TO_SERIAL
@@ -876,6 +981,7 @@ void setup() {
             // sleep, stop sampling and shut down.
             switch(esp_sleep_get_wakeup_cause()) {
                 case ESP_SLEEP_WAKEUP_EXT1: shutdown();
+                default: break;
             }
 
             // Reinitialize connection with DS3231 before reactivating the ULP
@@ -931,7 +1037,7 @@ void setup() {
             // Save the buffer to flash:
             #if ECHO_TO_SERIAL
                 Serial.printf("RTC Time Now: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
-                Serial.printf("Dumping to card...\nFirst Timestamp=%d\nP\tT\n", firstSampleTimestamp);
+                Serial.printf("Dumping to card...\nFirst Timestamp=%ld\nP\tT\n", firstSampleTimestamp);
                 for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
                     printf("%.2f \t%u\n", writeBuffer[i].pressure, writeBuffer[i].temperature);
                 }
@@ -944,34 +1050,34 @@ void setup() {
             #endif
             digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD card power
             delay(100); // Some sensors were erroring here, so maybe delay is needed?
-            if (!SD.begin(SD_CS_PIN)) {
+            if (!sdInit()) {
                 ERROR(sdInitError, false);
             }
 
             #if ECHO_TO_SERIAL
-                Serial.printf("Card Size: %d\n", SD.cardSize());
+                Serial.printf("Card Size: %lld\n", 123456789ll); //SD.cardSize());
                 Serial.flush();
             #endif
 
             // Open a file for logging the data. If it's the first dump of
             // the day, start a new file.
             // TODO: Write buffered data before starting new day
-            File f = SD.open(outputFileName, FILE_APPEND, false);
-            if (!f) {
+            FILE* f = fopen(outputFileName, "a");
+            if (f == NULL) {
                 ERROR(sdFileError, true);
             }
             // Write timestamp of first sample.
-            size_t written = f.write((uint8_t*) &firstSampleTimestamp, sizeof(firstSampleTimestamp));
+            size_t written = fwrite(&firstSampleTimestamp, sizeof(firstSampleTimestamp), 1, f);
             // Write the data buffer as a sequence of bytes (it's vital that
             // the entry_t struct is packed, otherwise there will be garbage
             // bytes in between each entry that will waste space). In order
             // to use this data later, we'll have to unpack it using a 
             // postprocessing script.
-            written += f.write((uint8_t*) writeBuffer, sizeof(writeBuffer));
-            f.close();
+            written += fwrite(writeBuffer, sizeof(writeBuffer[0]), BUFFER_SIZE, f);
+            fclose(f);
             
             #if ECHO_TO_SERIAL
-                Serial.printf("Wrote %lu bytes to file\n", written);
+                Serial.printf("Wrote %u bytes to file\n", written);
                 Serial.flush();
             #endif
 
@@ -985,18 +1091,18 @@ void setup() {
             // cycle.
             if (oldDay != timeNow.mday) {
                 // Generate a new file name with the current date and time.
-                snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year % 10000, timeNow.mon % 100, timeNow.mday % 100, timeNow.hour % 100, timeNow.min % 100);
                 // Start a new file.
-                f = SD.open(outputFileName, FILE_WRITE, true);
-                if (!f) {
+                f = fopen(outputFileName, "w");
+                if (f == NULL) {
                     ERROR(sdFileError, true);
                 }
                 
-                f.close();
+                fclose(f);
                 oldDay = timeNow.mday;
             } 
 
-            SD.end();
+            sdDeinit();
             #if ECHO_TO_SERIAL
                 Serial.printf("Turning off SD power in %d ms... ", SD_OFF_DELAY_MS);
             #endif
@@ -1032,271 +1138,271 @@ void loop() {
     ERROR(exitedSetupError, true);
 }
 
-void runServer() {
-    // Reset CPU frequency to default so WiFi stuff functions properly.
-    setCpuFrequencyMhz(240);
+// void runServer() {
+//     // Reset CPU frequency to default so WiFi stuff functions properly.
+//     setCpuFrequencyMhz(240);
 
-    #if ECHO_TO_SERIAL
-        Serial.print("Setting up WiFi access point... ");
-        Serial.flush();
-    #endif
-    if (WiFi.softAP(deviceName)) {
-        #if ECHO_TO_SERIAL
-            Serial.print("Done\n");
-            Serial.flush();
-        #endif
-    } else {
-        #if ECHO_TO_SERIAL
-            Serial.print("Failed\n");
-            Serial.flush();
-        #endif
-        ERROR(wifiApSetupError, 1);
-    }
+//     #if ECHO_TO_SERIAL
+//         Serial.print("Setting up WiFi access point... ");
+//         Serial.flush();
+//     #endif
+//     if (WiFi.softAP(deviceName)) {
+//         #if ECHO_TO_SERIAL
+//             Serial.print("Done\n");
+//             Serial.flush();
+//         #endif
+//     } else {
+//         #if ECHO_TO_SERIAL
+//             Serial.print("Failed\n");
+//             Serial.flush();
+//         #endif
+//         ERROR(wifiApSetupError, 1);
+//     }
 
-    #if ECHO_TO_SERIAL
-        Serial.print("Setting up WiFi server... ");
-        Serial.flush();
-    #endif
-    wifiServer = WiFiServer(WIFI_SERVER_PORT);
-    wifiServer.begin();
-    #if ECHO_TO_SERIAL
-        Serial.print("Done\nSetting up DNS server... ");
-        Serial.flush();
-    #endif
-    if (dnsServer.start(DNS_SERVER_PORT, DASHBOARD_DOMAIN, WiFi.softAPIP())) {
-        #if ECHO_TO_SERIAL
-            Serial.print("Done\nBeginning server loop\n");
-            Serial.flush();
-        #endif
-    } else {
-        #if ECHO_TO_SERIAL
-            Serial.print("Failed\n");
-            Serial.flush();
-        #endif
-        ERROR(dnsSetupError, 1);
-    }
+//     #if ECHO_TO_SERIAL
+//         Serial.print("Setting up WiFi server... ");
+//         Serial.flush();
+//     #endif
+//     wifiServer = WiFiServer(WIFI_SERVER_PORT);
+//     wifiServer.begin();
+//     #if ECHO_TO_SERIAL
+//         Serial.print("Done\nSetting up DNS server... ");
+//         Serial.flush();
+//     #endif
+//     if (dnsServer.start(DNS_SERVER_PORT, DASHBOARD_DOMAIN, WiFi.softAPIP())) {
+//         #if ECHO_TO_SERIAL
+//             Serial.print("Done\nBeginning server loop\n");
+//             Serial.flush();
+//         #endif
+//     } else {
+//         #if ECHO_TO_SERIAL
+//             Serial.print("Failed\n");
+//             Serial.flush();
+//         #endif
+//         ERROR(dnsSetupError, 1);
+//     }
 
-    hw_timer_t* timer0 = timerBegin(1000000);
-    timerAttachInterrupt(timer0, serverModeLedToggleInterrupt);
-    timerAlarm(timer0, SERVER_MODE_LED_FLASH_PERIOD_MS * 1000, true, 0);
+//     hw_timer_t* timer0 = timerBegin(1000000);
+//     timerAttachInterrupt(timer0, serverModeLedToggleInterrupt);
+//     timerAlarm(timer0, SERVER_MODE_LED_FLASH_PERIOD_MS * 1000, true, 0);
 
-    buttonPressed = false;
-    while(1) {
-        serverLoop();
-        if (toggleLed) {
-            if (digitalRead(ERROR_LED_PIN) == LOW) {
-                digitalWrite(ERROR_LED_PIN, HIGH);
-            } else {
-                digitalWrite(ERROR_LED_PIN, LOW);
-            }
-            toggleLed = false;
-        }
-        if (buttonPressed) {
-            #if ECHO_TO_SERIAL
-                Serial.print("Stopping DNS and WiFi server... ");
-                Serial.flush();
-            #endif
-            dnsServer.stop();
-            wifiServer.stop();
-            #if ECHO_TO_SERIAL
-                Serial.flush();
-            #endif
-            WiFi.mode(WIFI_OFF);
-            #if ECHO_TO_SERIAL
-                Serial.println("Done\nStopping LED timer and shutting down");
-                Serial.flush();
-            #endif
-            timerEnd(timer0);
-            shutdown();
-        }
-    }
-}
+//     buttonPressed = false;
+//     while(1) {
+//         serverLoop();
+//         if (toggleLed) {
+//             if (digitalRead(ERROR_LED_PIN) == LOW) {
+//                 digitalWrite(ERROR_LED_PIN, HIGH);
+//             } else {
+//                 digitalWrite(ERROR_LED_PIN, LOW);
+//             }
+//             toggleLed = false;
+//         }
+//         if (buttonPressed) {
+//             #if ECHO_TO_SERIAL
+//                 Serial.print("Stopping DNS and WiFi server... ");
+//                 Serial.flush();
+//             #endif
+//             dnsServer.stop();
+//             wifiServer.stop();
+//             #if ECHO_TO_SERIAL
+//                 Serial.flush();
+//             #endif
+//             WiFi.mode(WIFI_OFF);
+//             #if ECHO_TO_SERIAL
+//                 Serial.println("Done\nStopping LED timer and shutting down");
+//                 Serial.flush();
+//             #endif
+//             timerEnd(timer0);
+//             shutdown();
+//         }
+//     }
+// }
 
-void serverLoop() {
-    dnsServer.processNextRequest();
+// void serverLoop() {
+//     dnsServer.processNextRequest();
 
-    WiFiClient client = wifiServer.accept(); 
-    if (client) {
-        #if ECHO_TO_SERIAL
-            Serial.print("Client connected\n");
-            Serial.flush();
-        #endif
-        ArduinoHttpServer::StreamHttpRequest<HTTP_REQUEST_MAX_BODY_SIZE> httpRequest(client);
-        if (httpRequest.readRequest()) {
-            const String& resource = httpRequest.getResource().toString();
-            #if ECHO_TO_SERIAL
-                Serial.print("\tReceived HTTP request\n");
-                char* method;
-                switch(httpRequest.getMethod()) {
-                    case ArduinoHttpServer::Method::Get: method = "GET"; break;
-                    case ArduinoHttpServer::Method::Put: method = "PUT"; break;
-                    case ArduinoHttpServer::Method::Post: method = "POST"; break;
-                    case ArduinoHttpServer::Method::Head: method = "HEAD"; break;
-                    case ArduinoHttpServer::Method::Delete: method = "DELETE"; break;
-                    default: method = "INVALID";
-                }
-                Serial.printf(
-                    "\t\tMethod: %s\n"
-                    "\t\tResource: %s\n"
-                    "\t\tBody: %s\n", 
-                    method, resource.c_str(), httpRequest.getBody()
-                );
-                Serial.flush();
-            #endif
-            switch (httpRequest.getMethod()) {
-                case ArduinoHttpServer::Method::Get:
-                {
-                    if (resource == "/") {
-                        ArduinoHttpServer::StreamHttpReply(client, "text/html").send(index_html);
-                        #if ECHO_TO_SERIAL
-                            Serial.print("\tSent reply with code 200\n");
-                            Serial.flush();
-                        #endif
-                    }
-                    else if (resource == "/api/clock") {
-                        struct ts timeNow;
-                        DS3231_get(&timeNow);
+//     WiFiClient client = wifiServer.accept(); 
+//     if (client) {
+//         #if ECHO_TO_SERIAL
+//             Serial.print("Client connected\n");
+//             Serial.flush();
+//         #endif
+//         ArduinoHttpServer::StreamHttpRequest<HTTP_REQUEST_MAX_BODY_SIZE> httpRequest(client);
+//         if (httpRequest.readRequest()) {
+//             const String& resource = httpRequest.getResource().toString();
+//             #if ECHO_TO_SERIAL
+//                 Serial.print("\tReceived HTTP request\n");
+//                 char* method;
+//                 switch(httpRequest.getMethod()) {
+//                     case ArduinoHttpServer::Method::Get: method = "GET"; break;
+//                     case ArduinoHttpServer::Method::Put: method = "PUT"; break;
+//                     case ArduinoHttpServer::Method::Post: method = "POST"; break;
+//                     case ArduinoHttpServer::Method::Head: method = "HEAD"; break;
+//                     case ArduinoHttpServer::Method::Delete: method = "DELETE"; break;
+//                     default: method = "INVALID";
+//                 }
+//                 Serial.printf(
+//                     "\t\tMethod: %s\n"
+//                     "\t\tResource: %s\n"
+//                     "\t\tBody: %s\n", 
+//                     method, resource.c_str(), httpRequest.getBody()
+//                 );
+//                 Serial.flush();
+//             #endif
+//             switch (httpRequest.getMethod()) {
+//                 case ArduinoHttpServer::Method::Get:
+//                 {
+//                     if (resource == "/") {
+//                         ArduinoHttpServer::StreamHttpReply(client, "text/html").send(index_html);
+//                         #if ECHO_TO_SERIAL
+//                             Serial.print("\tSent reply with code 200\n");
+//                             Serial.flush();
+//                         #endif
+//                     }
+//                     else if (resource == "/api/clock") {
+//                         struct ts timeNow;
+//                         DS3231_get(&timeNow);
 
-                        char json[64];
-                        snprintf(json, sizeof(json), "{\"clock_time\": %d}\n", timeNow.unixtime);
+//                         char json[64];
+//                         snprintf(json, sizeof(json), "{\"clock_time\": %d}\n", timeNow.unixtime);
 
-                        ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
-                        #if ECHO_TO_SERIAL
-                            Serial.print("\tSent reply with code 200\n");
-                            Serial.flush();
-                        #endif
-                    } else if (resource == "/api/sensor") {
-                        sensor.readSensor();
+//                         ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
+//                         #if ECHO_TO_SERIAL
+//                             Serial.print("\tSent reply with code 200\n");
+//                             Serial.flush();
+//                         #endif
+//                     } else if (resource == "/api/sensor") {
+//                         sensor.readSensor();
 
-                        char json[64];
-                        snprintf(
-                            json, 
-                            sizeof(json), 
-                            "{\"sensor_pressure\": %.1f, \"sensor_temperature\": %.1f}",
-                            sensor.pressure(), sensor.temperature()
-                        );
+//                         char json[64];
+//                         snprintf(
+//                             json, 
+//                             sizeof(json), 
+//                             "{\"sensor_pressure\": %.1f, \"sensor_temperature\": %.1f}",
+//                             sensor.pressure(), sensor.temperature()
+//                         );
 
-                        ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
-                        #if ECHO_TO_SERIAL
-                            Serial.print("\tSent reply with code 200\n");
-                            Serial.flush();
-                        #endif
-                    } else if (resource == "/api/all") {
-                        struct ts timeNow;
-                        DS3231_get(&timeNow);
-                        sensor.readSensor();
+//                         ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
+//                         #if ECHO_TO_SERIAL
+//                             Serial.print("\tSent reply with code 200\n");
+//                             Serial.flush();
+//                         #endif
+//                     } else if (resource == "/api/all") {
+//                         struct ts timeNow;
+//                         DS3231_get(&timeNow);
+//                         sensor.readSensor();
 
-                        char json[512];
-                        snprintf(
-                            json, 
-                            sizeof(json), 
-                            "{" 
-                                "\"device_name\": \"%s\","
-                                "\"storage_capacity\": %llu,"
-                                "\"storage_used\": %llu,"
-                                "\"clock_time\": %ld,"
-                                "\"sensor_pressure\": %.1f," 
-                                "\"sensor_temperature\": %.1f"
-                            "}",
-                            deviceName,
-                            SD.cardSize(), 
-                            SD.usedBytes(), 
-                            timeNow.unixtime,
-                            sensor.pressure(), 
-                            sensor.temperature()
-                        );
+//                         char json[512];
+//                         snprintf(
+//                             json, 
+//                             sizeof(json), 
+//                             "{" 
+//                                 "\"device_name\": \"%s\","
+//                                 "\"storage_capacity\": %llu,"
+//                                 "\"storage_used\": %llu,"
+//                                 "\"clock_time\": %ld,"
+//                                 "\"sensor_pressure\": %.1f," 
+//                                 "\"sensor_temperature\": %.1f"
+//                             "}",
+//                             deviceName,
+//                             SD.cardSize(), 
+//                             SD.usedBytes(), 
+//                             timeNow.unixtime,
+//                             sensor.pressure(), 
+//                             sensor.temperature()
+//                         );
 
-                        ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
-                        #if ECHO_TO_SERIAL
-                            Serial.print("\tSent reply with code 200\n");
-                            Serial.flush();
-                        #endif
-                    } else {
-                        ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
-                        #if ECHO_TO_SERIAL
-                            Serial.print("\tSent reply with code 404\n");
-                            Serial.flush();
-                        #endif
-                    }
-                    break;
-                }
-                case ArduinoHttpServer::Method::Post: {
-                    if (resource == "/api/clock") {
-                        const char *const body = httpRequest.getBody();
-                        uintmax_t epoch_time = strtoumax(body, NULL, 10);
-                        if (epoch_time == 0) {
-                            #if ECHO_TO_SERIAL
-                                Serial.println("\tError: Invalid time string in http body");
-                                Serial.flush();
-                            #endif
-                            ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "422").send("");
-                            #if ECHO_TO_SERIAL
-                                Serial.print("\tSent reply with code 422\n");
-                                Serial.flush();
-                            #endif
-                            break;
-                        } else if (epoch_time > std::numeric_limits<time_t>::max()) {
-                            #if ECHO_TO_SERIAL
-                                Serial.println("\tError: Time given is too large to set onboard clock");
-                                Serial.flush();
-                            #endif
-                            ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "422").send("");
-                            #if ECHO_TO_SERIAL
-                                Serial.print("\tSent reply with code 422\n");
-                                Serial.flush();
-                            #endif
-                            break;
-                        }
-                        time_t converted_epoch_time = static_cast<time_t>(epoch_time);
-                        struct tm *time = localtime(&converted_epoch_time);
+//                         ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
+//                         #if ECHO_TO_SERIAL
+//                             Serial.print("\tSent reply with code 200\n");
+//                             Serial.flush();
+//                         #endif
+//                     } else {
+//                         ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
+//                         #if ECHO_TO_SERIAL
+//                             Serial.print("\tSent reply with code 404\n");
+//                             Serial.flush();
+//                         #endif
+//                     }
+//                     break;
+//                 }
+//                 case ArduinoHttpServer::Method::Post: {
+//                     if (resource == "/api/clock") {
+//                         const char *const body = httpRequest.getBody();
+//                         uintmax_t epoch_time = strtoumax(body, NULL, 10);
+//                         if (epoch_time == 0) {
+//                             #if ECHO_TO_SERIAL
+//                                 Serial.println("\tError: Invalid time string in http body");
+//                                 Serial.flush();
+//                             #endif
+//                             ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "422").send("");
+//                             #if ECHO_TO_SERIAL
+//                                 Serial.print("\tSent reply with code 422\n");
+//                                 Serial.flush();
+//                             #endif
+//                             break;
+//                         } else if (epoch_time > std::numeric_limits<time_t>::max()) {
+//                             #if ECHO_TO_SERIAL
+//                                 Serial.println("\tError: Time given is too large to set onboard clock");
+//                                 Serial.flush();
+//                             #endif
+//                             ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "422").send("");
+//                             #if ECHO_TO_SERIAL
+//                                 Serial.print("\tSent reply with code 422\n");
+//                                 Serial.flush();
+//                             #endif
+//                             break;
+//                         }
+//                         time_t converted_epoch_time = static_cast<time_t>(epoch_time);
+//                         struct tm *time = localtime(&converted_epoch_time);
 
-                        struct ts rtc_time = {
-                            .sec = time->tm_sec,
-                            .min = time->tm_min,
-                            .hour = time->tm_hour,
-                            .mday = time->tm_mday,
-                            .mon = time->tm_mon + 1,      // tm uses 0 based month while ts is 1 based
-                            .year = time->tm_year + 1900, // tm uses years since 1900 while ts requires the actual year
-                            .wday = time->tm_wday,
-                            .yday = time->tm_yday,
-                        };
-                        DS3231_set(rtc_time);
-                        #if ECHO_TO_SERIAL
-                            Serial.print("\tClock updated\n");
-                            Serial.flush();
-                        #endif
+//                         struct ts rtc_time = {
+//                             .sec = time->tm_sec,
+//                             .min = time->tm_min,
+//                             .hour = time->tm_hour,
+//                             .mday = time->tm_mday,
+//                             .mon = time->tm_mon + 1,      // tm uses 0 based month while ts is 1 based
+//                             .year = time->tm_year + 1900, // tm uses years since 1900 while ts requires the actual year
+//                             .wday = time->tm_wday,
+//                             .yday = time->tm_yday,
+//                         };
+//                         DS3231_set(rtc_time);
+//                         #if ECHO_TO_SERIAL
+//                             Serial.print("\tClock updated\n");
+//                             Serial.flush();
+//                         #endif
 
-                        ArduinoHttpServer::StreamHttpReply(client, "text/plain").send("");
-                        #if ECHO_TO_SERIAL
-                            Serial.print("\tSent reply with code 200\n");
-                            Serial.flush();
-                        #endif
-                    } else {
-                        ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
-                        #if ECHO_TO_SERIAL
-                            Serial.print("\tSent reply with code 404\n");
-                            Serial.flush();
-                        #endif
-                    }
-                    break;
-                }
-                default:
-                    ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "501").send("");
-                    #if ECHO_TO_SERIAL
-                        Serial.print("\tSent reply with code 501\n");
-                        Serial.flush();
-                    #endif
-            }
-        } else {
-            #if ECHO_TO_SERIAL
-                Serial.print("\tFailed to read incoming request\n");
-                Serial.flush();
-            #endif
-        }
-        client.stop();
-        #if ECHO_TO_SERIAL
-            Serial.print("Client disconnected\n");
-            Serial.flush();
-        #endif
-    }
-}
+//                         ArduinoHttpServer::StreamHttpReply(client, "text/plain").send("");
+//                         #if ECHO_TO_SERIAL
+//                             Serial.print("\tSent reply with code 200\n");
+//                             Serial.flush();
+//                         #endif
+//                     } else {
+//                         ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
+//                         #if ECHO_TO_SERIAL
+//                             Serial.print("\tSent reply with code 404\n");
+//                             Serial.flush();
+//                         #endif
+//                     }
+//                     break;
+//                 }
+//                 default:
+//                     ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "501").send("");
+//                     #if ECHO_TO_SERIAL
+//                         Serial.print("\tSent reply with code 501\n");
+//                         Serial.flush();
+//                     #endif
+//             }
+//         } else {
+//             #if ECHO_TO_SERIAL
+//                 Serial.print("\tFailed to read incoming request\n");
+//                 Serial.flush();
+//             #endif
+//         }
+//         client.stop();
+//         #if ECHO_TO_SERIAL
+//             Serial.print("Client disconnected\n");
+//             Serial.flush();
+//         #endif
+//     }
+// }

@@ -1,12 +1,9 @@
-[submodule "code/idf-test/DIY4/components/HULP"]
-	path = code/idf-test/DIY4/components/HULP
+[submodule "code/DIY3-DIY4/components/HULP"]
+	path = code/DIY3-DIY4/components/HULP
 	url = https://github.com/boarchuz/HULP
-[submodule "code/idf-test/DIY4/components/arduino_libraries/ds3231"]
-	path = code/idf-test/DIY4/components/arduino_libraries/ds3231
+[submodule "code/DIY3-DIY4/components/arduino-libraries/ds3231"]
+	path = code/DIY3-DIY4/components/arduino-libraries/ds3231
 	url = https://github.com/rodan/ds3231
-[submodule "code/idf-test/DIY4/components/arduino_libraries/MS5803_05"]
-	path = code/idf-test/DIY4/components/arduino_libraries/MS5803_05
+[submodule "code/DIY3-DIY4/components/arduino-libraries/MS5803_05"]
+	path = code/DIY3-DIY4/components/arduino-libraries/MS5803_05
 	url = https://github.com/benchittle/MS5803_05
-[submodule "code/idf-test/DIY4/components/arduino_libraries/base64_arduino"]
-	path = code/idf-test/DIY4/components/arduino_libraries/base64_arduino
-	url = https://github.com/Densaugeo/base64_arduino
