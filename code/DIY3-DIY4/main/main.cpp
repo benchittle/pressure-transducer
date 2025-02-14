@@ -667,7 +667,7 @@ void sdDeinit() {
     spi_bus_free(sdspi_device_config.host_id);
 }
 
-void setup() {
+extern "C" void app_main() {
     esp_err_t ret;
      bool buttonPressedAtStartup = false;
     #if ECHO_TO_SERIAL
@@ -1041,9 +1041,6 @@ void setup() {
     }
 }
 
-void loop() {
-    ERROR(exitedSetupError, true);
-}
 
 // void runServer() {
 //     // Reset CPU frequency to default so WiFi stuff functions properly.
