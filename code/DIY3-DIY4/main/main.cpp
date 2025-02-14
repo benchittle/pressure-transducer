@@ -1,18 +1,11 @@
-#include "Arduino.h"
-// == Base Function == //
-// #include <FS.h>
-// #include <SD.h>
-#include <string.h>
-#include <sys/unistd.h>
-#include <sys/stat.h>
-
+// ESP IDF libraries
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
-// #include "driver/sdspi_host.h"
+#include "ulp.h"
 
-#include <SPI.h>
-#include <Wire.h>
-#include <esp32/ulp.h>
+// Arduino libraries
+#include "SPI.h"
+#include "Wire.h"
 
 // ULP macro programming utility functions.
 // https://github.com/boarchuz/HULP
@@ -117,7 +110,7 @@
 
 #define SERVER_MODE_LED_FLASH_PERIOD_MS 50
 
-static const char* TAG = "DIY4";
+static const char* TAG = "transducer";
 
 
 // A custom struct to store a single data entry.
@@ -133,7 +126,7 @@ struct entry_t {
 // Globals for SD card
 sdmmc_card_t* card;
 sdspi_device_config_t sdspi_device_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-char mountPoint[] = SD_MOUNT_POINT;
+char sdMountPoint[] = SD_MOUNT_POINT;
 
 // Initialize a sensor object for interacting with the MS5803-05
 RTC_DATA_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
@@ -357,7 +350,7 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
             Serial.flush();
         #endif
         ++restartCount;
-        ESP.restart();
+        esp_restart();
     } else {
         #if ECHO_TO_SERIAL
             Serial.println("Max restart count reached. Going into endless deep sleep");
@@ -536,17 +529,14 @@ void IRAM_ATTR serverModeLedToggleInterrupt() {
 [[noreturn]]
 void shutdown() {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    #if ECHO_TO_SERIAL
-        Serial.println("Shutting down...\n\tStopping ULP");
-        Serial.flush();
-    #endif
+
+    ESP_LOGI(TAG, "Beginning shutdown");
+    ESP_LOGI(TAG, "Stopping ULP");
+
     // Stop ULP after it finishes next cycle.
     hulp_ulp_end();
 
-    #if ECHO_TO_SERIAL
-        Serial.println("\tDeinitializing RTC");
-        Serial.flush();
-    #endif
+    ESP_LOGI(TAG, "Deinitializing RTC");
     // Enable power to RTC
     digitalWrite(RTC_POWER_PIN, HIGH);
     // Wait to make sure RTC is on and ULP is done using I2C.
@@ -567,10 +557,7 @@ void shutdown() {
     // keep the LED on during deep sleep.
     hulp_configure_pin(ERROR_LED_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, HIGH);
 
-    #if ECHO_TO_SERIAL
-        Serial.println("Done\nPower can be turned off safely");
-        Serial.flush();
-    #endif
+    ESP_LOGI(TAG, "Power can now be turned off safely");
 
     // Keep LED on during sleep.
     hulp_peripherals_on();
@@ -625,7 +612,7 @@ bool sdInit() {
     slot_config.host_id = (spi_host_device_t) host.slot;
 
     ESP_LOGI(TAG, "Mounting filesystem");
-    ret = esp_vfs_fat_sdspi_mount(mountPoint, &host, &slot_config, &mount_config, &card);
+    ret = esp_vfs_fat_sdspi_mount(sdMountPoint, &host, &slot_config, &mount_config, &card);
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
@@ -644,8 +631,39 @@ bool sdInit() {
     return true;
 }
 
+DWORD sdGetUsed() {
+    // FATFS *fs;
+    // DWORD fre_clust, fre_sect, tot_sect;
+
+    // // Get volume information and free clusters of SD card
+    // FRESULT res = f_getfree(sdMountPoint, &fre_clust, &fs);
+    // if (res) {
+    //     return 0;
+    // }
+
+    // // Get total sectors and free sectors
+    // tot_sect = (fs->n_fatent - 2) * fs->csize;
+    // fre_sect = fre_clust * fs->csize;
+
+    // return (tot_sect - fre_sect) * card->csd.sector_size;
+
+    FATFS *fs;
+    DWORD fre_clust, fre_sect, tot_sect;
+ 
+    // Get volume information and free clusters of drive 0
+    if(f_getfree("0:", &fre_clust, &fs) == FR_OK)
+    {
+        // Get total sectors and free sectors
+        tot_sect = (fs->n_fatent - 2) * fs->csize;
+        fre_sect = fre_clust * fs->csize;
+ 
+        return (tot_sect - fre_sect) * card->csd.sector_size;
+    }
+    return 0;
+}
+
 void sdDeinit() {
-    esp_vfs_fat_sdcard_unmount(mountPoint, card);
+    esp_vfs_fat_sdcard_unmount(sdMountPoint, card);
     spi_bus_free(sdspi_device_config.host_id);
 }
 
@@ -683,21 +701,15 @@ void setup() {
             restartCount = 0;
             if (digitalRead(BUTTON_PIN) == LOW) {
                 buttonPressedAtStartup = true;
-                #if ECHO_TO_SERIAL
-                    ESP_LOGI(TAG, "Button press detected at startup. Device will enter server mode after initializing");
-                    // Serial.flush();
-                #endif
+                ESP_LOGI(TAG, "Button press detected at startup. Device will enter server mode after initializing");
             }
             [[fallthrough]];
         case ESP_RST_SW: {
             ulpBufOffset.val = 0;
             ulpD2Flag.val = 0;
 
-            #if ECHO_TO_SERIAL
-                // delay(1000); // Give time for Serial Monitor to start listening
-                ESP_LOGI(TAG, "STARTING SETUP\nCode uploaded on " __DATE__ " @ " __TIME__ "\nInitializing RTC... ");
-                // Serial.flush();
-            #endif
+            ESP_LOGI(TAG, "Starting setup");
+            ESP_LOGI(TAG, "Initializing RTC");
 
             Wire.begin();
             // Initialize the connection with the RTC:
@@ -724,33 +736,20 @@ void setup() {
             DS3231_get(&timeNow);
             oldDay = timeNow.mday;
 
-            #if ECHO_TO_SERIAL
-                ESP_LOGI(TAG, "Done\n\tRTC Time: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
-                // Serial.flush();
-            #endif
+            ESP_LOGI(TAG, "RTC initialized. Time is %d-%02d-%02d %02d:%02d:%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
 
             // TODO: Check Status register as well, as it indicates if time was 
             // set since powered on (See #1)
-            if (timeNow.year < 2023) {
-                #if ECHO_TO_SERIAL
-                    ESP_LOGW(TAG, "WARNING: Time is out of date. Setting year to 2000 for UNIX time compatibility...\n");
-                    // Serial.flush();
-                #endif
+            if (timeNow.year < 2025) {
+                ESP_LOGW(TAG, "RTC time is out of date. Setting year to 2000 for UNIX time compatibility");
                 timeNow.year = 2000;
                 DS3231_set(timeNow);
-                #if ECHO_TO_SERIAL
-                    ESP_LOGI(TAG, "Done\n\tNew RTC Time: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
-                    // Serial.flush();
-                #endif
+                ESP_LOGW(TAG, "New RTC time is %d-%02d-%02d %02d:%02d:%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
             }
 
             // Only start the alarm if we aren't going into server mode.
             if (!buttonPressedAtStartup) {
-                #if ECHO_TO_SERIAL
-                    ESP_LOGI(TAG, "Starting RTC once-per-second alarm... ");
-                    // Serial.flush();
-                #endif
-
+                ESP_LOGI(TAG, "Starting RTC once-per-second alarm");
                 // Start the once-per-second alarm on the DS3231:
                 // These flags set the alarm to be in once-per-second mode.
                 const uint8_t flags[] = {1,1,1,1,0};
@@ -760,107 +759,57 @@ void setup() {
                 // Enable the alarm. It will now bring the RTC_ALARM_PIN GPIO low every
                 // second.
                 DS3231_set_creg(DS3231_CONTROL_BBSQW | DS3231_CONTROL_RS2 | DS3231_CONTROL_RS1 | DS3231_CONTROL_INTCN | DS3231_CONTROL_A1IE);
-
-                #if ECHO_TO_SERIAL
-                    ESP_LOGI(TAG, "Done\n");
-                #endif
             }
 
-
-            #if ECHO_TO_SERIAL
-                ESP_LOGI(TAG, "Initializing SD card... ");
-                // Serial.flush();
-            #endif
-
+            // Initialize and mount the SD card
             sdInit();
-
-            // Card has been initialized, print its properties
-            sdmmc_card_print_info(stdout, card);
-
-            // Initialize the connection with the SD card.
-            // digitalWrite(SD_SWITCH_PIN, LOW);
-            // if (!SD.begin(SD_CS_PIN)) {
-            //     ERROR(sdInitError, false);
-            // }
-
-            #if ECHO_TO_SERIAL
-                ESP_LOGI(TAG, "Done\nLooking for config file at " CONFIG_FILE "... ");
-                // Serial.flush();
-            #endif
-
+            uint64_t sdCapacityKb = ((uint64_t) card->csd.capacity) * card->csd.sector_size / 1024;
+            ESP_LOGI(TAG, "Card size: %llu KiB", sdCapacityKb);
+            uint32_t sdUsedKb = sdGetUsed() / 1024;
+            ESP_LOGI(TAG, "Card used: %lu KiB", sdUsedKb);
+            
 
             // Get device's name from SD card or use default.
+            ESP_LOGI(TAG, "Looking for config file at " CONFIG_FILE);
             FILE* config = fopen(CONFIG_FILE, "r");
-            if (config == NULL) {
+            if (config == nullptr) {
                 strcpy(deviceName, DEFAULT_DEVICE_NAME);
                 strcpy(logFileName, DEFAULT_LOG_FILE_NAME);
-                #if ECHO_TO_SERIAL
-                    ESP_LOGI(TAG, "Failed\nWARNING: Unable to find config file. Using default device name: %s\n", deviceName);
-                    // Serial.flush();
-                #endif
+                ESP_LOGW(TAG, "Unable to find config file. Using default device name: %s\n", deviceName);
                 flash(sdConfigWarning);
             } else {
-                // CHECK RETURN VALUE
+                // TODO: Check if name is longer than max
                 fgets(deviceName, DEVICE_NAME_SIZE, config);
-                // config.read((uint8_t*) deviceName, DEVICE_NAME_SIZE - 1);
-                // config.close();
                 fclose(config);
-                config = NULL;
+                config = nullptr;
+                ESP_LOGI(TAG, "Device name is %s", deviceName);
 
                 snprintf(logFileName, LOG_FILE_NAME_SIZE, LOG_FILE_NAME_PREFIX "%s" LOG_FILE_NAME_SUFFIX, deviceName);
-
-                #if ECHO_TO_SERIAL
-                    Serial.printf("Done\n\tDevice Name: %s\tLog File Name: %s\n", deviceName, logFileName);
-                    Serial.flush();
-                #endif
+                ESP_LOGI(TAG, "Log file name will be %s", logFileName);
             }
 
-            #if ECHO_TO_SERIAL
-                Serial.print("Creating first output file... ");
-                Serial.flush();
-            #endif
             
             // Generate the first file.
+            ESP_LOGI(TAG, "Creating first data output file");
             snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year % 10000, timeNow.mon % 100, timeNow.mday % 100, timeNow.hour % 100, timeNow.min % 100);
-            
-            ESP_LOGI(TAG, "Attempting to open file: %s", outputFileName);
             FILE* f = fopen(outputFileName, "w");
-            if (f == NULL) {
+            if (f == nullptr) {
                 ERROR(sdFileError, true);
             }
             fclose(f);
-            f = NULL;
-
-            #if ECHO_TO_SERIAL
-                Serial.printf("Done\n\tFile is %s\nInitializing MS5803 pressure sensor... ", outputFileName);
-                Serial.flush();
-            #endif
-
-
-            // Initialize the connection with the MS5803-05 pressure sensor.
+            f = nullptr;
+            ESP_LOGI(TAG, "First data output file is %s", outputFileName);
+            
+            ESP_LOGI(TAG, "Initializing MS5803 pressure sensor");
             if (!sensor.initializeMS_5803(false)) {
                 ERROR(ms5803Error, true);
             }
-
-            #if ECHO_TO_SERIAL
-                Serial.print("Done\nTaking a sample sensor reading... ");
-                Serial.flush();
-            #endif
-
+            
+            ESP_LOGI(TAG, "Taking a sample sensor reading");
             sensor.readSensor();
+            ESP_LOGI(TAG, "Pressure: %f mbar \tTemperature: %f deg C", sensor.pressure(), sensor.temperature());
 
-            #if ECHO_TO_SERIAL
-                Serial.printf("Done\n\tPressure: %f mbar\tTemperature: %f deg C\n", sensor.pressure(), sensor.temperature());
-                Serial.flush();
-            #endif
-
-
-            // Write an entry to the log file with diagnostic and setup info.
-            #if ECHO_TO_SERIAL
-                Serial.print("Writing to log file... ");
-                Serial.flush();
-            #endif
-
+            ESP_LOGI(TAG, "Writing diagnostics to log file");
             FILE* logFile = fopen(logFileName, "a");
             if (!logFile) {
                 ERROR(sdFileError, false);
@@ -871,8 +820,8 @@ void setup() {
                 "Sample Pressure: %f mbar\n"
                 "Sample Temp: %f deg C\n"
                 "Code uploaded on: " __DATE__ " @ " __TIME__ "\n"
-                // "SD capacity: %llu B\n"
-                // "SD used: %llu B\n"
+                "SD capacity: %llu KiB\n"
+                "SD used: %lu KiB\n"
                 "ECHO_TO_SERIAL=%d\n"
                 "MAX_RESTART_COUNT=%d\n"
                 "BUFFER_SIZE=%d\n"
@@ -884,42 +833,32 @@ void setup() {
                 "firstSampleTimestamp=%ld\n",
                 timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, 
                 timeNow.min, timeNow.sec, sensor.pressure(), 
-                // sensor.temperature(), SD.cardSize(), SD.usedBytes(),
-                sensor.temperature(),
+                sensor.temperature(), sdCapacityKb, sdUsedKb,
+                // sensor.temperature(),
                 ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, logFileName,
                 deviceName, outputFileName, restartCount, firstSampleTimestamp
             );
-
             fclose(logFile);
-            logFile = NULL;
+            logFile = nullptr;
 
+            // Deinitialize the SD card if we're going into dashboard server mode
             if (!buttonPressedAtStartup) {
                 sdDeinit();
             }
 
-            #if ECHO_TO_SERIAL
-                Serial.print("Done\nFlashing LED... ");
-                Serial.flush();
-            #endif
-
-
             // Flash LED's to signal successful startup.
+            ESP_LOGI(TAG, "Flashing LED");
             digitalWrite(ERROR_LED_PIN, HIGH);
             delay(3000);
             digitalWrite(ERROR_LED_PIN, LOW);
 
             if (buttonPressedAtStartup) {
-                #if ECHO_TO_SERIAL
-                    Serial.println("Done\nEntering server mode");
-                    Serial.flush();
-                #endif
+                ESP_LOGI(TAG, "Entering server mode");
                 // runServer();          
             }
 
-            #if ECHO_TO_SERIAL
-                Serial.print("Done\nDisabling SD card power and getting updated time... ");
-                Serial.flush();
-            #endif
+            // TODO: only if DIY4 
+            ESP_LOGI(TAG, "Disabling SD card power and getting updated time");
 
             digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
 
@@ -929,25 +868,15 @@ void setup() {
             // taken during the next second.
             firstSampleTimestamp = timeNow.unixtime + 1;
 
-            #if ECHO_TO_SERIAL
-                Serial.printf(
-                    "Done\n"
-                    "\tTime is %d-%02d-%02d %02d:%02d:%02d\n"
-                    "Waiting for next second... ", 
-                    timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec
-                );
-                Serial.flush();
-            #endif
-
+            ESP_LOGI(TAG, "Time is %d-%02d-%02d %02d:%02d:%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+            
             // Wait the rest of this second to start.
+            ESP_LOGI(TAG, "Waiting for next second"); 
             while (timeNow.unixtime < firstSampleTimestamp) {
                 DS3231_get(&timeNow);
             }
 
-            #if ECHO_TO_SERIAL
-                Serial.print("Done\nDisabling DS3231 pin power and starting ULP... ");
-                Serial.flush();
-            #endif
+            ESP_LOGI(TAG, "Disabling DS3231 pin power");
 
             // Disable power to the DS3231's VCC.
             digitalWrite(RTC_POWER_PIN, LOW);
@@ -955,14 +884,13 @@ void setup() {
             restartCount = 0;
 
             // Start the ULP program.
+            ESP_LOGI(TAG, "Starting ULP");
             initUlp();
 
-            #if ECHO_TO_SERIAL
-                Serial.println("Done\nSETUP COMPLETE\nGoing to sleep...");
-                Serial.flush();
-            #endif
-
+            ESP_LOGI(TAG, "Setup complete!");
+            
             // Allow the ULP to trigger the ESP32 to wake up.
+            ESP_LOGI(TAG, "Going to sleep");
             ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
             // Enter deep sleep.
             esp_deep_sleep_start();
@@ -971,11 +899,7 @@ void setup() {
         // TODO: Check if DS3231 backup battery failed and switch to main power
         // TODO: Cleanup Serial logging / debug messages
         case ESP_RST_DEEPSLEEP: {
-
-            #if ECHO_TO_SERIAL    
-                Serial.println("Awake!");
-                Serial.flush();
-            #endif
+            ESP_LOGI(TAG, "Awake!");
 
             // If the shutdown button was pushed while the device was in deep 
             // sleep, stop sampling and shut down.
@@ -1033,53 +957,44 @@ void setup() {
                 };
             }
 
-
             // Save the buffer to flash:
-            #if ECHO_TO_SERIAL
-                Serial.printf("RTC Time Now: %d-%02d-%02d %02d:%02d:%02d\n", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
-                Serial.printf("Dumping to card...\nFirst Timestamp=%ld\nP\tT\n", firstSampleTimestamp);
-                for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
-                    printf("%.2f \t%u\n", writeBuffer[i].pressure, writeBuffer[i].temperature);
-                }
-                Serial.flush();
-            #endif
+            ESP_LOGI(TAG, "RTC Time Now: %d-%02d-%02d %02d:%02d:%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+            ESP_LOGI(TAG, "Dumping to card");
+            ESP_LOGI(TAG, "First Timestamp=%ld", firstSampleTimestamp);
+            ESP_LOGI(TAG, "P\t\tT");
+            for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
+                ESP_LOGI(TAG, "%.2f \t%u", writeBuffer[i].pressure, writeBuffer[i].temperature);
+            }
 
             // Reinitialize connection with SD card.
-            #if ECHO_TO_SERIAL
-                Serial.println("Turning on SD power");
-            #endif
+            ESP_LOGI(TAG, "Turning on SD power");
             digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD card power
             delay(100); // Some sensors were erroring here, so maybe delay is needed?
             if (!sdInit()) {
                 ERROR(sdInitError, false);
             }
 
-            #if ECHO_TO_SERIAL
-                Serial.printf("Card Size: %lld\n", 123456789ll); //SD.cardSize());
-                Serial.flush();
-            #endif
+            ESP_LOGI(TAG, "Card capacity used: %ld KiB", sdGetUsed() / 1024);
 
             // Open a file for logging the data. If it's the first dump of
             // the day, start a new file.
             // TODO: Write buffered data before starting new day
             FILE* f = fopen(outputFileName, "a");
-            if (f == NULL) {
+            if (f == nullptr) {
                 ERROR(sdFileError, true);
             }
             // Write timestamp of first sample.
-            size_t written = fwrite(&firstSampleTimestamp, sizeof(firstSampleTimestamp), 1, f);
+            size_t written = fwrite(&firstSampleTimestamp, sizeof(firstSampleTimestamp), 1, f) * sizeof(firstSampleTimestamp);
             // Write the data buffer as a sequence of bytes (it's vital that
             // the entry_t struct is packed, otherwise there will be garbage
             // bytes in between each entry that will waste space). In order
             // to use this data later, we'll have to unpack it using a 
             // postprocessing script.
-            written += fwrite(writeBuffer, sizeof(writeBuffer[0]), BUFFER_SIZE, f);
+            written += fwrite(writeBuffer, sizeof(writeBuffer[0]), BUFFER_SIZE, f) * sizeof(writeBuffer[0]);
             fclose(f);
+            f = nullptr;
             
-            #if ECHO_TO_SERIAL
-                Serial.printf("Wrote %u bytes to file\n", written);
-                Serial.flush();
-            #endif
+            ESP_LOGI(TAG, "Wrote %u bytes to file\n", written);
 
             // Save a timestamp for the first sample. We'll add 1 second
             // (alarmStatus) to the time if the alarm hadn't triggered yet when
@@ -1094,25 +1009,20 @@ void setup() {
                 snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year % 10000, timeNow.mon % 100, timeNow.mday % 100, timeNow.hour % 100, timeNow.min % 100);
                 // Start a new file.
                 f = fopen(outputFileName, "w");
-                if (f == NULL) {
+                if (f == nullptr) {
                     ERROR(sdFileError, true);
                 }
-                
                 fclose(f);
+                f = nullptr;
                 oldDay = timeNow.mday;
             } 
 
             sdDeinit();
-            #if ECHO_TO_SERIAL
-                Serial.printf("Turning off SD power in %d ms... ", SD_OFF_DELAY_MS);
-            #endif
+            ESP_LOGI(TAG, "Turning off SD power in %d ms", SD_OFF_DELAY_MS);
             delay(SD_OFF_DELAY_MS);
             digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
 
-            #if ECHO_TO_SERIAL
-                Serial.println("Done\nGoing to sleep...");
-                Serial.flush();
-            #endif
+            ESP_LOGI(TAG, "Going to sleep...");
 
             if (buttonPressed) {
                 shutdown();
@@ -1126,10 +1036,7 @@ void setup() {
         }
 
         default: 
-            #if ECHO_TO_SERIAL
-                Serial.printf("Wakeup reason: %d\n", esp_reset_reason());
-                Serial.flush();
-            #endif
+            ESP_LOGI(TAG, "Wakeup reason: %d\n", esp_reset_reason());
             ERROR(resetError, true);
     }
 }
@@ -1329,7 +1236,7 @@ void loop() {
 //                 case ArduinoHttpServer::Method::Post: {
 //                     if (resource == "/api/clock") {
 //                         const char *const body = httpRequest.getBody();
-//                         uintmax_t epoch_time = strtoumax(body, NULL, 10);
+//                         uintmax_t epoch_time = strtoumax(body, nullptr, 10);
 //                         if (epoch_time == 0) {
 //                             #if ECHO_TO_SERIAL
 //                                 Serial.println("\tError: Invalid time string in http body");
