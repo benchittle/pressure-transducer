@@ -1,7 +1,14 @@
 // ESP IDF libraries
+#include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "ulp.h"
+
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "esp_wifi.h"
+#include "esp_http_server.h"
 
 // Arduino libraries
 #include "SPI.h"
@@ -15,12 +22,6 @@
 #include "ds3231.h" // https://github.com/rodan/ds3231
 #include "MS5803_05.h" // https://github.com/benchittle/MS5803_05, a fork of Luke Miller's repo: https://github.com/millerlp/MS5803_05
 // =================== //
-
-// == WiFi Dashboard == //
-// #include <WiFi.h>
-// #include <DNSServer.h>
-
-// #include "ArduinoHttpServer.h" // https://github.com/QuickSander/ArduinoHttpServer
 
 // HTML for the dashboard page encoded as a byte array.
 #include "index_html.h"
@@ -111,6 +112,10 @@
 #define SERVER_MODE_LED_FLASH_PERIOD_MS 50
 
 static const char* TAG = "transducer";
+static const char* TAG_DASHBOARD = "dashboard";
+
+// TODO: Move all WiFi / dashboard functionality to its own file
+void startDashboard();
 
 
 // A custom struct to store a single data entry.
@@ -200,6 +205,7 @@ RTC_DATA_ATTR ulp_var_t ulp_i2c_write_clearAlarm[] = {
 // DNSServer dnsServer;
 
 bool toggleLed = false;
+bool sdInitialized = false;
 
 
 // Error codes for the program. The value associated with each enum is also the
@@ -628,24 +634,14 @@ bool sdInit() {
 
     // Card has been initialized, print its properties
     // sdmmc_card_print_info(stdout, card);
+    sdInitialized = true;
     return true;
 }
 
 DWORD sdGetUsed() {
-    // FATFS *fs;
-    // DWORD fre_clust, fre_sect, tot_sect;
-
-    // // Get volume information and free clusters of SD card
-    // FRESULT res = f_getfree(sdMountPoint, &fre_clust, &fs);
-    // if (res) {
-    //     return 0;
-    // }
-
-    // // Get total sectors and free sectors
-    // tot_sect = (fs->n_fatent - 2) * fs->csize;
-    // fre_sect = fre_clust * fs->csize;
-
-    // return (tot_sect - fre_sect) * card->csd.sector_size;
+    if (!sdInitialized) {
+        return 0;
+    }
 
     FATFS *fs;
     DWORD fre_clust, fre_sect, tot_sect;
@@ -665,20 +661,12 @@ DWORD sdGetUsed() {
 void sdDeinit() {
     esp_vfs_fat_sdcard_unmount(sdMountPoint, card);
     spi_bus_free(sdspi_device_config.host_id);
+    sdInitialized = false;
 }
 
 extern "C" void app_main() {
     esp_err_t ret;
-     bool buttonPressedAtStartup = false;
-    #if ECHO_TO_SERIAL
-        Serial.begin(115200);
-    #else
-        // ADC, WiFi, BlueTooth are disabled by default.        
-        // Default CPU frequency is 240MHz, but we don't need high speed. Note
-        // that the serial monitor baud rate changes with lower frequencies, so
-        // it is not changed when debugging.
-        setCpuFrequencyMhz(10);     
-    #endif
+    bool buttonPressedAtStartup = false;
 
     // pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
@@ -854,7 +842,7 @@ extern "C" void app_main() {
 
             if (buttonPressedAtStartup) {
                 ESP_LOGI(TAG, "Entering server mode");
-                // runServer();          
+                startDashboard();          
             }
 
             // TODO: only if DIY4 
@@ -1041,272 +1029,310 @@ extern "C" void app_main() {
     }
 }
 
+static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+        wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
+        ESP_LOGI(TAG_DASHBOARD, "station "MACSTR" join, AID=%d",
+        MAC2STR(event->mac), event->aid);
+    } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+        wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
+        ESP_LOGI(TAG_DASHBOARD, "station "MACSTR" leave, AID=%d, reason=%d",
+        MAC2STR(event->mac), event->aid, event->reason);
+    }
+}
 
-// void runServer() {
-//     // Reset CPU frequency to default so WiFi stuff functions properly.
-//     setCpuFrequencyMhz(240);
+/* Initialize soft AP */
+void wifi_init_softap()
+{
+    // esp_netif_t *esp_netif_ap = esp_netif_create_default_wifi_ap();
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_t* ap_netif = esp_netif_create_default_wifi_ap();
 
-//     #if ECHO_TO_SERIAL
-//         Serial.print("Setting up WiFi access point... ");
-//         Serial.flush();
-//     #endif
-//     if (WiFi.softAP(deviceName)) {
-//         #if ECHO_TO_SERIAL
-//             Serial.print("Done\n");
-//             Serial.flush();
-//         #endif
-//     } else {
-//         #if ECHO_TO_SERIAL
-//             Serial.print("Failed\n");
-//             Serial.flush();
-//         #endif
-//         ERROR(wifiApSetupError, 1);
-//     }
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-//     #if ECHO_TO_SERIAL
-//         Serial.print("Setting up WiFi server... ");
-//         Serial.flush();
-//     #endif
-//     wifiServer = WiFiServer(WIFI_SERVER_PORT);
-//     wifiServer.begin();
-//     #if ECHO_TO_SERIAL
-//         Serial.print("Done\nSetting up DNS server... ");
-//         Serial.flush();
-//     #endif
-//     if (dnsServer.start(DNS_SERVER_PORT, DASHBOARD_DOMAIN, WiFi.softAPIP())) {
-//         #if ECHO_TO_SERIAL
-//             Serial.print("Done\nBeginning server loop\n");
-//             Serial.flush();
-//         #endif
-//     } else {
-//         #if ECHO_TO_SERIAL
-//             Serial.print("Failed\n");
-//             Serial.flush();
-//         #endif
-//         ERROR(dnsSetupError, 1);
-//     }
+    ESP_ERROR_CHECK(
+        esp_event_handler_instance_register(
+            WIFI_EVENT,
+            ESP_EVENT_ANY_ID,
+            &wifi_event_handler,
+            NULL,
+            NULL
+        )
+    );
 
-//     hw_timer_t* timer0 = timerBegin(1000000);
-//     timerAttachInterrupt(timer0, serverModeLedToggleInterrupt);
-//     timerAlarm(timer0, SERVER_MODE_LED_FLASH_PERIOD_MS * 1000, true, 0);
+    wifi_config_t wifi_ap_config = {
+        .ap = {
+            // .ssid = (uint8_t*) deviceName,
+            .ssid_len = 0,
+            .channel = 1,
+            .authmode = WIFI_AUTH_OPEN,
+            .max_connection = 2,
+            .pmf_cfg = {
+                .required = true,
+            },
+        },
+    };
+    strcpy((char*) wifi_ap_config.ap.ssid, deviceName);
 
-//     buttonPressed = false;
-//     while(1) {
-//         serverLoop();
-//         if (toggleLed) {
-//             if (digitalRead(ERROR_LED_PIN) == LOW) {
-//                 digitalWrite(ERROR_LED_PIN, HIGH);
-//             } else {
-//                 digitalWrite(ERROR_LED_PIN, LOW);
-//             }
-//             toggleLed = false;
-//         }
-//         if (buttonPressed) {
-//             #if ECHO_TO_SERIAL
-//                 Serial.print("Stopping DNS and WiFi server... ");
-//                 Serial.flush();
-//             #endif
-//             dnsServer.stop();
-//             wifiServer.stop();
-//             #if ECHO_TO_SERIAL
-//                 Serial.flush();
-//             #endif
-//             WiFi.mode(WIFI_OFF);
-//             #if ECHO_TO_SERIAL
-//                 Serial.println("Done\nStopping LED timer and shutting down");
-//                 Serial.flush();
-//             #endif
-//             timerEnd(timer0);
-//             shutdown();
-//         }
-//     }
-// }
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
 
-// void serverLoop() {
-//     dnsServer.processNextRequest();
+    ESP_LOGI(TAG, "wifi_init_softap finished");
+}
 
-//     WiFiClient client = wifiServer.accept(); 
-//     if (client) {
-//         #if ECHO_TO_SERIAL
-//             Serial.print("Client connected\n");
-//             Serial.flush();
-//         #endif
-//         ArduinoHttpServer::StreamHttpRequest<HTTP_REQUEST_MAX_BODY_SIZE> httpRequest(client);
-//         if (httpRequest.readRequest()) {
-//             const String& resource = httpRequest.getResource().toString();
-//             #if ECHO_TO_SERIAL
-//                 Serial.print("\tReceived HTTP request\n");
-//                 char* method;
-//                 switch(httpRequest.getMethod()) {
-//                     case ArduinoHttpServer::Method::Get: method = "GET"; break;
-//                     case ArduinoHttpServer::Method::Put: method = "PUT"; break;
-//                     case ArduinoHttpServer::Method::Post: method = "POST"; break;
-//                     case ArduinoHttpServer::Method::Head: method = "HEAD"; break;
-//                     case ArduinoHttpServer::Method::Delete: method = "DELETE"; break;
-//                     default: method = "INVALID";
-//                 }
-//                 Serial.printf(
-//                     "\t\tMethod: %s\n"
-//                     "\t\tResource: %s\n"
-//                     "\t\tBody: %s\n", 
-//                     method, resource.c_str(), httpRequest.getBody()
-//                 );
-//                 Serial.flush();
-//             #endif
-//             switch (httpRequest.getMethod()) {
-//                 case ArduinoHttpServer::Method::Get:
-//                 {
-//                     if (resource == "/") {
-//                         ArduinoHttpServer::StreamHttpReply(client, "text/html").send(index_html);
-//                         #if ECHO_TO_SERIAL
-//                             Serial.print("\tSent reply with code 200\n");
-//                             Serial.flush();
-//                         #endif
-//                     }
-//                     else if (resource == "/api/clock") {
-//                         struct ts timeNow;
-//                         DS3231_get(&timeNow);
+static esp_err_t http_get_index_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, index_html, index_html_len);
 
-//                         char json[64];
-//                         snprintf(json, sizeof(json), "{\"clock_time\": %d}\n", timeNow.unixtime);
+    return ESP_OK;
+}
 
-//                         ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
-//                         #if ECHO_TO_SERIAL
-//                             Serial.print("\tSent reply with code 200\n");
-//                             Serial.flush();
-//                         #endif
-//                     } else if (resource == "/api/sensor") {
-//                         sensor.readSensor();
+static esp_err_t http_get_api_clock_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
 
-//                         char json[64];
-//                         snprintf(
-//                             json, 
-//                             sizeof(json), 
-//                             "{\"sensor_pressure\": %.1f, \"sensor_temperature\": %.1f}",
-//                             sensor.pressure(), sensor.temperature()
-//                         );
+    struct ts timeNow;
+    DS3231_get(&timeNow);
 
-//                         ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
-//                         #if ECHO_TO_SERIAL
-//                             Serial.print("\tSent reply with code 200\n");
-//                             Serial.flush();
-//                         #endif
-//                     } else if (resource == "/api/all") {
-//                         struct ts timeNow;
-//                         DS3231_get(&timeNow);
-//                         sensor.readSensor();
+    char json[32] = {0};
+    int json_len = snprintf(json, sizeof(json), "{\"clock_time\": %ld}\n", timeNow.unixtime);
 
-//                         char json[512];
-//                         snprintf(
-//                             json, 
-//                             sizeof(json), 
-//                             "{" 
-//                                 "\"device_name\": \"%s\","
-//                                 "\"storage_capacity\": %llu,"
-//                                 "\"storage_used\": %llu,"
-//                                 "\"clock_time\": %ld,"
-//                                 "\"sensor_pressure\": %.1f," 
-//                                 "\"sensor_temperature\": %.1f"
-//                             "}",
-//                             deviceName,
-//                             SD.cardSize(), 
-//                             SD.usedBytes(), 
-//                             timeNow.unixtime,
-//                             sensor.pressure(), 
-//                             sensor.temperature()
-//                         );
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, json_len);
 
-//                         ArduinoHttpServer::StreamHttpReply(client, "application/json").send(json);
-//                         #if ECHO_TO_SERIAL
-//                             Serial.print("\tSent reply with code 200\n");
-//                             Serial.flush();
-//                         #endif
-//                     } else {
-//                         ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
-//                         #if ECHO_TO_SERIAL
-//                             Serial.print("\tSent reply with code 404\n");
-//                             Serial.flush();
-//                         #endif
-//                     }
-//                     break;
-//                 }
-//                 case ArduinoHttpServer::Method::Post: {
-//                     if (resource == "/api/clock") {
-//                         const char *const body = httpRequest.getBody();
-//                         uintmax_t epoch_time = strtoumax(body, nullptr, 10);
-//                         if (epoch_time == 0) {
-//                             #if ECHO_TO_SERIAL
-//                                 Serial.println("\tError: Invalid time string in http body");
-//                                 Serial.flush();
-//                             #endif
-//                             ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "422").send("");
-//                             #if ECHO_TO_SERIAL
-//                                 Serial.print("\tSent reply with code 422\n");
-//                                 Serial.flush();
-//                             #endif
-//                             break;
-//                         } else if (epoch_time > std::numeric_limits<time_t>::max()) {
-//                             #if ECHO_TO_SERIAL
-//                                 Serial.println("\tError: Time given is too large to set onboard clock");
-//                                 Serial.flush();
-//                             #endif
-//                             ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "422").send("");
-//                             #if ECHO_TO_SERIAL
-//                                 Serial.print("\tSent reply with code 422\n");
-//                                 Serial.flush();
-//                             #endif
-//                             break;
-//                         }
-//                         time_t converted_epoch_time = static_cast<time_t>(epoch_time);
-//                         struct tm *time = localtime(&converted_epoch_time);
+    return ESP_OK;
+}
 
-//                         struct ts rtc_time = {
-//                             .sec = time->tm_sec,
-//                             .min = time->tm_min,
-//                             .hour = time->tm_hour,
-//                             .mday = time->tm_mday,
-//                             .mon = time->tm_mon + 1,      // tm uses 0 based month while ts is 1 based
-//                             .year = time->tm_year + 1900, // tm uses years since 1900 while ts requires the actual year
-//                             .wday = time->tm_wday,
-//                             .yday = time->tm_yday,
-//                         };
-//                         DS3231_set(rtc_time);
-//                         #if ECHO_TO_SERIAL
-//                             Serial.print("\tClock updated\n");
-//                             Serial.flush();
-//                         #endif
+static esp_err_t http_get_api_sensor_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
 
-//                         ArduinoHttpServer::StreamHttpReply(client, "text/plain").send("");
-//                         #if ECHO_TO_SERIAL
-//                             Serial.print("\tSent reply with code 200\n");
-//                             Serial.flush();
-//                         #endif
-//                     } else {
-//                         ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "404").send("");
-//                         #if ECHO_TO_SERIAL
-//                             Serial.print("\tSent reply with code 404\n");
-//                             Serial.flush();
-//                         #endif
-//                     }
-//                     break;
-//                 }
-//                 default:
-//                     ArduinoHttpServer::StreamHttpErrorReply(client, "text/plain", "501").send("");
-//                     #if ECHO_TO_SERIAL
-//                         Serial.print("\tSent reply with code 501\n");
-//                         Serial.flush();
-//                     #endif
-//             }
-//         } else {
-//             #if ECHO_TO_SERIAL
-//                 Serial.print("\tFailed to read incoming request\n");
-//                 Serial.flush();
-//             #endif
-//         }
-//         client.stop();
-//         #if ECHO_TO_SERIAL
-//             Serial.print("Client disconnected\n");
-//             Serial.flush();
-//         #endif
-//     }
-// }
+    sensor.readSensor();
+
+    char json[64] = {0};
+    int json_len = snprintf(
+        json, 
+        sizeof(json), 
+        "{\"sensor_pressure\": %.1f, \"sensor_temperature\": %.1f}",
+        sensor.pressure(), sensor.temperature()
+    );
+
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, json_len);
+
+    return ESP_OK;
+}
+
+static esp_err_t http_get_api_all_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
+
+    struct ts timeNow;
+    DS3231_get(&timeNow);
+    sensor.readSensor();
+
+    char json[256] = {0};
+    int json_len = snprintf(
+        json, 
+        sizeof(json), 
+        "{" 
+            "\"device_name\": \"%s\","
+            "\"storage_capacity\": %u,"
+            "\"storage_used\": %lu,"
+            "\"clock_time\": %ld,"
+            "\"sensor_pressure\": %.1f," 
+            "\"sensor_temperature\": %.1f"
+        "}",
+        deviceName,
+        card->csd.capacity, 
+        sdGetUsed(),
+        timeNow.unixtime,
+        sensor.pressure(), 
+        sensor.temperature()
+    );
+
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, json_len);
+
+    return ESP_OK;
+}
+
+static esp_err_t http_post_api_clock_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG_DASHBOARD, "Received: POST %s", req->uri);
+
+    char content[16];
+    if (req->content_len > sizeof(content)) {
+        ESP_LOGI(TAG_DASHBOARD, "Content size is too big: expected max of %d. Replying with 413", sizeof(content));
+        httpd_resp_send_custom_err(req, "413", "Content Too Large");
+        return ESP_FAIL;
+    }
+
+    int ret = httpd_req_recv(req, content, req->content_len);
+    if (ret <= 0) {
+        // Check if timeout occurred
+        ESP_LOGE(TAG_DASHBOARD, "Failed to receive content");
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    uintmax_t epoch_time = strtoumax(content, nullptr, 10);
+
+    if (epoch_time == 0) {
+        ESP_LOGI(TAG_DASHBOARD, "The received time string was parsed as 0. This is likely an error and time will not be set");
+        httpd_resp_send_custom_err(req, "422", "Unprocessable Content");
+        return ESP_FAIL;
+    } else if (epoch_time > std::numeric_limits<time_t>::max()) {
+        ESP_LOGI(TAG_DASHBOARD, "Time given is too large (%lld). Time will not be set", epoch_time);
+        httpd_resp_send_custom_err(req, "422", "Unprocessable Content");
+        return ESP_FAIL;
+    }
+
+    time_t converted_epoch_time = static_cast<time_t>(epoch_time);
+    struct tm *time = localtime(&converted_epoch_time);
+
+    struct ts rtc_time = {
+        .sec = static_cast<uint8_t>(time->tm_sec),
+        .min = static_cast<uint8_t>(time->tm_min),
+        .hour = static_cast<uint8_t>(time->tm_hour),
+        .mday = static_cast<uint8_t>(time->tm_mday),
+        .mon = static_cast<uint8_t>(time->tm_mon + 1),      // tm uses 0 based month while ts is 1 based
+        .year = static_cast<int16_t>(time->tm_year + 1900), // tm uses years since 1900 while ts requires the actual year
+        .wday = static_cast<uint8_t>(time->tm_wday),
+        .yday = static_cast<uint8_t>(time->tm_yday),
+    };
+    DS3231_set(rtc_time);
+    ESP_LOGI(TAG_DASHBOARD, "Clock updated");
+
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "", 0);
+
+    return ESP_OK;
+}
+
+static const httpd_uri_t http_get_index = {
+    .uri = "/",
+    .method = HTTP_GET,
+    .handler = http_get_index_handler,
+    .user_ctx = NULL,
+};
+
+static const httpd_uri_t http_get_api_clock = {
+    .uri = "/api/clock",
+    .method = HTTP_GET,
+    .handler = http_get_api_clock_handler,
+    .user_ctx = NULL,
+};
+
+static const httpd_uri_t http_get_api_sensor = {
+    .uri = "/api/sensor",
+    .method = HTTP_GET,
+    .handler = http_get_api_sensor_handler,
+    .user_ctx = NULL,
+};
+
+static const httpd_uri_t http_get_api_all = {
+    .uri = "/api/all",
+    .method = HTTP_GET,
+    .handler = http_get_api_all_handler,
+    .user_ctx = NULL,
+};
+
+static const httpd_uri_t http_post_api_clock = {
+    .uri = "/api/clock",
+    .method = HTTP_POST,
+    .handler = http_post_api_clock_handler,
+    .user_ctx = NULL,
+};
+
+httpd_handle_t startServer() {
+    httpd_handle_t server = NULL;
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();    
+
+    config.lru_purge_enable = true;
+
+    // Start the httpd server
+    ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
+    if (httpd_start(&server, &config) == ESP_OK) {
+        // Set URI handlers
+        ESP_LOGI(TAG, "Registering URI handlers");
+        httpd_register_uri_handler(server, &http_get_index);
+        httpd_register_uri_handler(server, &http_get_api_clock);
+        httpd_register_uri_handler(server, &http_get_api_sensor);
+        httpd_register_uri_handler(server, &http_get_api_all);
+        httpd_register_uri_handler(server, &http_post_api_clock);
+
+        return server;
+    }
+
+    ESP_LOGI(TAG, "Error starting server!");
+    return NULL;
+}
+
+
+void startDashboard() {
+    // Reset CPU frequency to default so WiFi stuff functions properly.
+    setCpuFrequencyMhz(240);
+
+    //Initialize NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    /* Initialize AP */
+    ESP_LOGI(TAG, "ESP_WIFI_MODE_AP");
+    wifi_init_softap();
+    
+    startServer();
+
+    while (1) {
+        vTaskDelay(1000);
+    }
+
+    // TODO: flashing LED while server is active
+    // TODO: DNS server
+
+    // hw_timer_t* timer0 = timerBegin(1000000);
+    // timerAttachInterrupt(timer0, serverModeLedToggleInterrupt);
+    // timerAlarm(timer0, SERVER_MODE_LED_FLASH_PERIOD_MS * 1000, true, 0);
+
+    // buttonPressed = false;
+    // while(1) {
+    //     serverLoop();
+    //     if (toggleLed) {
+    //         if (digitalRead(ERROR_LED_PIN) == LOW) {
+    //             digitalWrite(ERROR_LED_PIN, HIGH);
+    //         } else {
+    //             digitalWrite(ERROR_LED_PIN, LOW);
+    //         }
+    //         toggleLed = false;
+    //     }
+    //     if (buttonPressed) {
+    //         #if ECHO_TO_SERIAL
+    //             Serial.print("Stopping DNS and WiFi server... ");
+    //             Serial.flush();
+    //         #endif
+    //         dnsServer.stop();
+    //         wifiServer.stop();
+    //         #if ECHO_TO_SERIAL
+    //             Serial.flush();
+    //         #endif
+    //         WiFi.mode(WIFI_OFF);
+    //         #if ECHO_TO_SERIAL
+    //             Serial.println("Done\nStopping LED timer and shutting down");
+    //             Serial.flush();
+    //         #endif
+    //         timerEnd(timer0);
+    //         shutdown();
+    //     }
+    // }
+}
