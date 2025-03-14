@@ -84,9 +84,15 @@
     sizeof(DEFAULT_LOG_FILE_NAME): \
     sizeof(LOG_FILE_NAME_PREFIX LOG_FILE_NAME_SUFFIX) + DEVICE_NAME_SIZE - 1)
 
+// Number of samples to take each second
+#define SAMPLES_PER_SECOND 4
+#define ULP_MS5803_CONVERSION_DELAY_US 10000
+#define ULP_RUN_PERIOD_US (1000 * 1000 / SAMPLES_PER_SECOND - ULP_MS5803_CONVERSION_DELAY_US)
+
 // Number of readings (pressure and temperature) to store in a buffer before we 
 // dump to the SD card.
-#define BUFFER_SIZE 15
+#define BUFFER_SIZE 16
+static_assert(BUFFER_SIZE % SAMPLES_PER_SECOND == 0, "BUFFER_SIZE must be a multiple of SAMPLES_PER_SECOND");
 // Number of ulp_var_t's needed for one raw pressure and temperature reading.
 // (24 bits for raw pressure, 24 bits for raw temperature; could be packed 
 // in only 3 spaces with more ULP processing).
@@ -97,10 +103,6 @@
 // After dumping data to the SD card, we'll wait this long before shutting off 
 // power to the SD card.
 #define SD_OFF_DELAY_MS 2000
-
-// While the ULP is active, it will repeatedly run at this interval 
-// (microseconds).
-#define ULP_RUN_PERIOD 1000
 
 #define WIFI_SERVER_PORT 80
 #define DNS_SERVER_PORT 53
@@ -166,6 +168,9 @@ RTC_DATA_ATTR ulp_var_t ulpBufOffset;
 // Flag used in the ULP program to track whether the MS5803's raw D2 value has
 // been read.
 RTC_DATA_ATTR ulp_var_t ulpD2Flag;
+// Used in the ULP program to track the number of samples taken in the
+// current second in order to implement >1 Hz sampling
+RTC_DATA_ATTR ulp_var_t ulpSamplesThisSecond;
 
 RTC_DATA_ATTR bool buttonPressed = false;
 
@@ -386,6 +391,8 @@ void initUlp()
         L_W_RETURN2,
         L_R_RETURN,
         L_DONE,
+        L_SAMPLE,
+        L_WAIT_FOR_ALARM,
     };
 
     // Notes: 
@@ -411,10 +418,20 @@ void initUlp()
     //       put ULP back to sleep until next cycle
     //     
     const ulp_insn_t program[] = {
+        I_MOVI(R1, 0),
+        I_GET(R0, R1, ulpSamplesThisSecond),
+        I_ADDI(R0, R0, 1),
+        I_PUT(R0, R1, ulpSamplesThisSecond),
+
+        M_BL(L_SAMPLE, SAMPLES_PER_SECOND),
+
         // Check to see if the RTC alarm was triggered. If so, continue. 
         // Otherwise, halt and put the ULP back to sleep until the next cycle.
+        M_LABEL(L_WAIT_FOR_ALARM),
         I_GPIO_READ(RTC_ALARM_PIN),
-        M_BGE(L_DONE, 1),
+        M_BGE(L_WAIT_FOR_ALARM, 1),
+
+        M_LABEL(L_SAMPLE),
         
         // Bitbanged I2C instruction: clear the DS3231's status register to 
         // disable the wakeup alarm.
@@ -425,17 +442,6 @@ void initUlp()
 
         // Clear D2 read flag.
         I_MOVI(R0, 0),
-        I_MOVI(R0, 0),
-        I_MOVI(R0, 0),
-        I_MOVI(R0, 0),
-        I_MOVI(R0, 0),
-        // I_MOVI(R0, 0),
-        // I_MOVI(R0, 0),
-        // I_MOVI(R0, 0),
-        // I_MOVI(R0, 0),
-        // I_MOVI(R0, 0),
-        // I_MOVI(R0, 0),
-        
         I_PUT(R0, R0, ulpD2Flag),
         
         // Issue I2C command to MS5803 to start ADC conversion
@@ -446,7 +452,7 @@ void initUlp()
         M_LABEL(L_W_RETURN0),
         
         // Wait 10ms for conversion
-        M_DELAY_US_5000_20000(10000),
+        M_DELAY_US_5000_20000(ULP_MS5803_CONVERSION_DELAY_US),
 
         // Issue I2C command to prepare to read the ADC value
         I_MOVO(R1, ulp_i2c_write_readADC),
@@ -510,7 +516,7 @@ void initUlp()
     //vTaskDelay(1000 / portTICK_PERIOD_MS);
 
     // Load the program and start the ULP.
-    ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), ULP_RUN_PERIOD, 0));
+    ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), ULP_RUN_PERIOD_US, 0));
     ESP_ERROR_CHECK(hulp_ulp_run(0));
 }
 
@@ -685,16 +691,18 @@ extern "C" void app_main() {
     // Jump to the appropriate code depending on whether the ESP32 was just 
     // powered or just woke up from deep sleep. 
     switch (esp_reset_reason()) {   
-        case ESP_RST_POWERON:
+        case ESP_RST_POWERON: {
             restartCount = 0;
             if (digitalRead(BUTTON_PIN) == LOW) {
                 buttonPressedAtStartup = true;
                 ESP_LOGI(TAG, "Button press detected at startup. Device will enter server mode after initializing");
             }
-            [[fallthrough]];
+        }
+        [[fallthrough]];
         case ESP_RST_SW: {
             ulpBufOffset.val = 0;
             ulpD2Flag.val = 0;
+            ulpSamplesThisSecond.val = 0;
 
             ESP_LOGI(TAG, "Starting setup");
             ESP_LOGI(TAG, "Initializing RTC");
@@ -922,6 +930,7 @@ extern "C" void app_main() {
             // it can run in parallel with the main program as we process the
             // raw data.
             ulpBufOffset.val = 0;
+            ulpSamplesThisSecond.val = 0;
             initUlp();
 
 
