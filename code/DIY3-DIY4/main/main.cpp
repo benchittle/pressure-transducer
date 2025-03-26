@@ -9,6 +9,7 @@
 #include "esp_event.h"
 #include "esp_wifi.h"
 #include "esp_http_server.h"
+#include "soc/rtc.h"
 
 // Arduino libraries
 #include "SPI.h"
@@ -84,15 +85,20 @@
     sizeof(DEFAULT_LOG_FILE_NAME): \
     sizeof(LOG_FILE_NAME_PREFIX LOG_FILE_NAME_SUFFIX) + DEVICE_NAME_SIZE - 1)
 
-// Number of samples to take each second
-#define SAMPLES_PER_SECOND 4
+// Number of samples to take each second.
+// MUST BE A POWER OF 2
+#define DEFAULT_SAMPLES_PER_SECOND 4
 #define ULP_MS5803_CONVERSION_DELAY_US 10000
-#define ULP_RUN_PERIOD_US (1000 * 1000 / SAMPLES_PER_SECOND - ULP_MS5803_CONVERSION_DELAY_US)
+#define ULP_PROGRAM_DURATION_US (ULP_MS5803_CONVERSION_DELAY_US + 8000)
+// #define ULP_DEFAULT_RUN_PERIOD_US (1000 * 1000 / DEFAULT_SAMPLES_PER_SECOND - ULP_PROGRAM_DURATION_US)
+
+#define ULP_CALIBRATION_DELAY_MS 100
+#define ULP_CYCLES_PER_WAIT_LOOP 22
 
 // Number of readings (pressure and temperature) to store in a buffer before we 
 // dump to the SD card.
-#define BUFFER_SIZE 16
-static_assert(BUFFER_SIZE % SAMPLES_PER_SECOND == 0, "BUFFER_SIZE must be a multiple of SAMPLES_PER_SECOND");
+#define BUFFER_SIZE 48
+static_assert(BUFFER_SIZE % DEFAULT_SAMPLES_PER_SECOND == 0, "BUFFER_SIZE must be a multiple of DEFAULT_SAMPLES_PER_SECOND");
 // Number of ulp_var_t's needed for one raw pressure and temperature reading.
 // (24 bits for raw pressure, 24 bits for raw temperature; could be packed 
 // in only 3 spaces with more ULP processing).
@@ -154,23 +160,30 @@ RTC_NOINIT_ATTR uint8_t restartCount;
 // file).
 RTC_DATA_ATTR uint8_t oldDay = 0;
 
+// Controls the number of samples that will be taken per second.
+RTC_DATA_ATTR ulp_var_t samplesPerSecond = {.val = DEFAULT_SAMPLES_PER_SECOND};
+
 // Store the epoch time for the first sensor reading in the buffer. This will be
 // stored in the output file along with the sensor data. This is updated every 
 // time the buffer is dumped.
 RTC_DATA_ATTR uint32_t firstSampleTimestamp;
+
+RTC_DATA_ATTR ulp_var_t tmp1 = {.val = 0};
+
+RTC_DATA_ATTR ulp_var_t ulp_calibration_loops = {.val = 0};
 
 // An array for the ULP to buffer raw sensor data while the main processor is in
 // deep sleep. Once full, the data will be processed into meaningful pressure
 // and temperature values and written to flash storage.
 RTC_DATA_ATTR ulp_var_t ulpBuffer[ULP_BUFFER_SIZE];
 // Used to index the ULP's buffer in the ULP program.
-RTC_DATA_ATTR ulp_var_t ulpBufOffset;
+RTC_DATA_ATTR ulp_var_t ulpBufOffset = {.val = 0};
 // Flag used in the ULP program to track whether the MS5803's raw D2 value has
 // been read.
-RTC_DATA_ATTR ulp_var_t ulpD2Flag;
+RTC_DATA_ATTR ulp_var_t ulpD2Flag = {.val = 0};
 // Used in the ULP program to track the number of samples taken in the
 // current second in order to implement >1 Hz sampling
-RTC_DATA_ATTR ulp_var_t ulpSamplesThisSecond;
+RTC_DATA_ATTR ulp_var_t ulpSamplesThisSecond = {.val = 0};
 
 RTC_DATA_ATTR bool buttonPressed = false;
 
@@ -373,6 +386,49 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
     }
 }
 
+RTC_DATA_ATTR volatile ulp_var_t ulp_wait_cycles= {.val = 0};
+
+void monitorULP() {
+    ESP_LOGI("MONITOR", "starting");
+
+    int old = 0;
+    struct timeval tv_now;
+    int64_t time_us;
+    gettimeofday(&tv_now, NULL);
+    int64_t last = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+    int64_t last_check = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+    int count = 0;
+
+    uint32_t rtc_8md256_period = rtc_clk_cal(RTC_CAL_8MD256, 100);
+    uint32_t rtc_fast_freq_hz = 1000000ULL * (1 << RTC_CLK_CAL_FRACT) * 256 / rtc_8md256_period;
+    ESP_LOGI("MONITOR", "rtc_fast_freq = %ld", rtc_fast_freq_hz);
+
+    uint16_t old_cycle_count = 0;
+    while(1) {
+        gettimeofday(&tv_now, NULL);
+        if (ulpBufOffset.val != old) {
+            old = ulpBufOffset.val;
+            int64_t time_us = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+            
+            ESP_LOGI("MONITOR", "delta_ms=%lld check_delta=%lld count=%d wait_cycles=%d wait_time_ms=%lu", (time_us - last) / 1000, (time_us - last_check) / 1000, count, ulp_calibration_loops.val, ulp_calibration_loops.val * 22 / (rtc_fast_freq_hz / 1000));
+            last = time_us;
+            old_cycle_count = ulp_wait_cycles.val;
+            count++;
+        }
+        last_check = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+        
+        vTaskDelay(1);
+
+        if (digitalRead(BUTTON_PIN) == 0) {
+            ulpBufOffset.val = 0;
+            ulpSamplesThisSecond.val = 0;
+            ESP_ERROR_CHECK(hulp_ulp_run(0));
+        }
+    }
+}
+
+
+
 
 /* 
  * Define the ULP program, configure the ULP appropriately, and upload the 
@@ -380,6 +436,9 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
  */ 
 void initUlp()
 {
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    int64_t start_time_us = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
     // Define labels used in the ULP program.
     enum {
         L_LOOP_FOR_D2,
@@ -393,6 +452,12 @@ void initUlp()
         L_DONE,
         L_SAMPLE,
         L_WAIT_FOR_ALARM,
+        L_LAST_SAMPLE_THIS_SECOND,
+        L_SAMPLE_WAIT_LOOP,
+        L_WAIT_FOR_ALARM_FAST,
+        L_WASTE_CYCLE_1,
+        L_WASTE_CYCLE_2,
+        L_WASTE_CYCLE_3,
     };
 
     // Notes: 
@@ -422,14 +487,64 @@ void initUlp()
         I_GET(R0, R1, ulpSamplesThisSecond),
         I_ADDI(R0, R0, 1),
         I_PUT(R0, R1, ulpSamplesThisSecond),
+        
+        // Load the samples per second variable
+        I_GET(R2, R1, samplesPerSecond),
 
-        M_BL(L_SAMPLE, SAMPLES_PER_SECOND),
+        I_GET(R1, R1, ulp_calibration_loops),
+        I_MOVR(R3, R1), // save this for later
+        
+        // If this is the last sample this second, wait for the RTC alarm first
+        I_SUBR(R0, R2, R0),
+        M_BL(L_LAST_SAMPLE_THIS_SECOND, 1),
 
-        // Check to see if the RTC alarm was triggered. If so, continue. 
-        // Otherwise, halt and put the ULP back to sleep until the next cycle.
+        // Otherwise, wait then go take a sample
+        M_LABEL(L_SAMPLE_WAIT_LOOP),
+        I_SUBI(R1, R1, 1),          // 2 + 4 = 6 cycles
+        M_BXZ(L_SAMPLE),            // 2 + 2 = 4 cycles
+        M_BX(L_WASTE_CYCLE_1),      // 2 + 2 = 4 cycles
+        M_LABEL(L_WASTE_CYCLE_1),   // (Waste cycles to match the other wait loops)
+        M_BX(L_WASTE_CYCLE_2),      // 2 + 2 = 4 cycles
+        M_LABEL(L_WASTE_CYCLE_2),
+        M_BX(L_SAMPLE_WAIT_LOOP),   // 2 + 2 = 4 cycles, total = 22
+
+        M_LABEL(L_LAST_SAMPLE_THIS_SECOND),
+        I_MOVI(R0, 0),
+        I_PUT(R0, R0, ulpSamplesThisSecond),
+        
+        // Wait until the RTC alarm is triggered and track how many 
+        // times we loop. We'll use this to adjust the sleep delay if we're 
+        // running fast or slow.
         M_LABEL(L_WAIT_FOR_ALARM),
+        I_SUBI(R1, R1, 1),                  // 2 + 4 = 6 cycles
+        M_BXZ(L_WAIT_FOR_ALARM_FAST),   // DUNNO IF THIS WORKS RIGHT // 2 + 2 = 4 cycles
+        I_GPIO_READ(RTC_ALARM_PIN),         // 4 + 4 = 8 cycles
+        M_BGE(L_WAIT_FOR_ALARM, 1),         // 2 + 2 = 4 cycles, total = 22
+        
+        // If we get here, either we were perfectly on time or slow
+        // Compensate: divide the remaining time (cycles) by the frequency 
+        // and reduce the calibration delay by that amount.
+        I_RSHR(R1, R1, R2), // R2 is samplesPerSecond
+        I_SUBR(R3, R3, R1), // R3 is ulp_calibration_loops
+        I_MOVI(R1, 0),
+        I_PUT(R3, R1, ulp_calibration_loops),
+        M_BX(L_SAMPLE),
+
+        // If we get here, the RTC alarm hasn't gone off yet so we're fast
+        // Keep looping and track it.
+        M_LABEL(L_WAIT_FOR_ALARM_FAST),
+        I_ADDI(R1, R1, 1),
+        M_BXZ(L_WASTE_CYCLE_3), // Used so that one loop = same # of cycles as earlier loop
+        M_LABEL(L_WASTE_CYCLE_3),
         I_GPIO_READ(RTC_ALARM_PIN),
-        M_BGE(L_WAIT_FOR_ALARM, 1),
+        M_BGE(L_WAIT_FOR_ALARM_FAST, 1),  
+
+        // Compensate: divide the cycles waited by the frequency and increase 
+        // the calibration delay by that amount
+        I_RSHR(R1, R1, R2), // R2 is samplesPerSecond
+        I_ADDR(R3, R3, R1), // R3 is ulp_calibration_loops
+        I_MOVI(R1, 0),
+        I_PUT(R3, R1, ulp_calibration_loops),
 
         M_LABEL(L_SAMPLE),
         
@@ -484,6 +599,7 @@ void initUlp()
         // Set D2 flag before branching to get D2. (Since we know R3 > 0, we 
         // don't need to MOVI(R3, 1) first, which saves an instruction).
         I_PUT(R3, R2, ulpD2Flag),
+        // I_PUT(R2, R2, ulp_wait_cycles),         // tmp CAUSING ISSUE BC ABOVE FIXED DISTANCE I_BGE JUMP
         I_MOVO(R1, ulp_i2c_write_convertD2),
         M_BX(L_LOOP_FOR_D2),
 
@@ -513,10 +629,21 @@ void initUlp()
 
     hulp_peripherals_on();
 
+    uint32_t wait_cycles = (hulp_get_fast_clk_freq() / 1000) * (ULP_CALIBRATION_DELAY_MS / samplesPerSecond.val);
+    ulp_calibration_loops.val = wait_cycles / ULP_CYCLES_PER_WAIT_LOOP;
+    ESP_LOGI(TAG, "Number of ULP wait loops per sample: %d", ulp_calibration_loops.val);
+
     //vTaskDelay(1000 / portTICK_PERIOD_MS);
 
+    
     // Load the program and start the ULP.
-    ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), ULP_RUN_PERIOD_US, 0));
+    // ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), ULP_DEFAULT_RUN_PERIOD_US, 0));
+    uint32_t ulp_sleep_duration_us = ((1000 / samplesPerSecond.val) - (ULP_CALIBRATION_DELAY_MS / samplesPerSecond.val)) * 1000 - ULP_PROGRAM_DURATION_US;
+    ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), ulp_sleep_duration_us, 0));
+
+    gettimeofday(&tv_now, NULL);
+    int64_t time_now_us = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+    vTaskDelay(((ulp_sleep_duration_us - (time_now_us - start_time_us)) / 1000) * portTICK_PERIOD_MS);
     ESP_ERROR_CHECK(hulp_ulp_run(0));
 }
 
@@ -700,10 +827,6 @@ extern "C" void app_main() {
         }
         [[fallthrough]];
         case ESP_RST_SW: {
-            ulpBufOffset.val = 0;
-            ulpD2Flag.val = 0;
-            ulpSamplesThisSecond.val = 0;
-
             ESP_LOGI(TAG, "Starting setup");
             ESP_LOGI(TAG, "Initializing RTC");
 
@@ -867,10 +990,11 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Time is %d-%02d-%02d %02d:%02d:%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
             
             // Wait the rest of this second to start.
-            ESP_LOGI(TAG, "Waiting for next second"); 
+            ESP_LOGI(TAG, "Waiting for next second and clearing alarm"); 
             while (timeNow.unixtime < firstSampleTimestamp) {
                 DS3231_get(&timeNow);
             }
+            DS3231_clear_a1f();
 
             ESP_LOGI(TAG, "Disabling DS3231 pin power");
 
@@ -884,6 +1008,8 @@ extern "C" void app_main() {
             initUlp();
 
             ESP_LOGI(TAG, "Setup complete!");
+
+            monitorULP();
             
             // Allow the ULP to trigger the ESP32 to wake up.
             ESP_LOGI(TAG, "Going to sleep");
