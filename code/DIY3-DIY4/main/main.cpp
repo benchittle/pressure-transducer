@@ -140,7 +140,7 @@ static const char* TAG = "transducer";
 static const char* TAG_DASHBOARD = "dashboard";
 
 // TODO: Move all WiFi / dashboard functionality to its own file
-void startDashboard();
+void start_dashboard();
 
 
 // A custom struct to store a single data entry.
@@ -156,58 +156,59 @@ struct entry_t {
 // Globals for SD card
 sdmmc_card_t* card;
 sdspi_device_config_t sdspi_device_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-char sdMountPoint[] = SD_MOUNT_POINT;
+char sd_mount_point[] = SD_MOUNT_POINT;
+
+// Button press flag, set when the extra button on the FireBeetle is pressed.
+RTC_FAST_ATTR volatile bool button_pressed = false;
 
 // Initialize a sensor object for interacting with the MS5803-05
 RTC_FAST_ATTR MS_5803 sensor(4096); // MAYBE CAN LOWER OVERSAMPLING
 
 // Store the device's name.
-RTC_FAST_ATTR char deviceName[DEVICE_NAME_SIZE] = {0};
+RTC_FAST_ATTR char device_name[DEVICE_NAME_SIZE] = {0};
 // Store the name for the current data file across deep sleep restarts.
-RTC_FAST_ATTR char outputFileName[FILE_NAME_SIZE] = {0};
+RTC_FAST_ATTR char output_file_name[FILE_NAME_SIZE] = {0};
 // Store the name for the log file.
-RTC_FAST_ATTR char logFileName[LOG_FILE_NAME_SIZE] = DEFAULT_LOG_FILE_NAME;
+RTC_FAST_ATTR char log_file_name[LOG_FILE_NAME_SIZE] = DEFAULT_LOG_FILE_NAME;
 
 // Track the number of times a custom error has been encountered causing the
 // device to restart.
-RTC_NOINIT_ATTR uint8_t restartCount;
+RTC_NOINIT_ATTR uint8_t restart_count;
 
 // Store the day of the month when the current output file was created. This is
 // used to determine when a new day has started (and thus when to start a new 
 // file).
-RTC_FAST_ATTR uint8_t oldDay = 0;
+RTC_FAST_ATTR uint8_t old_day = 0;
 
 // Controls the number of samples that will be taken per second.
-RTC_FAST_ATTR uint8_t samplesPerSecond = MAX_SAMPLES_PER_SECOND;
+RTC_FAST_ATTR uint8_t samples_per_second = MAX_SAMPLES_PER_SECOND;
 
 // Store the epoch time for the first sensor reading in the buffer. This will be
 // stored in the output file along with the sensor data. This is updated every 
 // time the buffer is dumped.
-RTC_FAST_ATTR uint32_t firstSampleTimestamp;
+RTC_FAST_ATTR uint32_t first_sample_timestamp;
 
 // An array for the ULP to buffer raw sensor data while the main processor is in
 // deep sleep. Once full, the data will be processed into meaningful pressure
 // and temperature values and written to flash storage.
-RTC_DATA_ATTR ulp_var_t ulpBuffer[ULP_BUFFER_SIZE];
-RTC_FAST_ATTR ulp_var_t ulpBufferCopy[ULP_BUFFER_SIZE];
+RTC_DATA_ATTR ulp_var_t ulp_sample_buffer[ULP_BUFFER_SIZE];
+RTC_FAST_ATTR ulp_var_t ulp_sample_buffer_copy[ULP_BUFFER_SIZE];
 // Used to index the ULP's buffer in the ULP program.
-RTC_DATA_ATTR ulp_var_t ulpBufOffset{};
+RTC_DATA_ATTR ulp_var_t ulp_sample_buffer_offset{};
 // Flag used in the ULP program to track whether the MS5803's raw D2 value has
 // been read.
-RTC_DATA_ATTR ulp_var_t ulpD2Flag{};
+RTC_DATA_ATTR ulp_var_t ulp_d2_flag{};
 // Used in the ULP program to track the number of samples taken in the
 // current second in order to implement >1 Hz sampling
-RTC_DATA_ATTR ulp_var_t ulpSamplesThisSecond{};
+RTC_DATA_ATTR ulp_var_t ulp_samples_this_second{};
 // If the main processor takes too long to wake up, the ULP will record how 
 // many samples it would have taken instead of taking samples to avoid 
 // overwriting the buffer before it has been copied.
-RTC_DATA_ATTR ulp_var_t ulpSkippedSamples{};
+RTC_DATA_ATTR ulp_var_t ulp_skipped_samples{};
 // The number of iterations of the wait loop the ULP should perform to sync 
 // with the DS3231. This value is adjusted by the ULP to compensate when running
 // fast or slow.
 RTC_DATA_ATTR ulp_var_t ulp_wait_loop_iterations{};
-
-RTC_DATA_ATTR volatile bool buttonPressed = false;
 
 // The following variables are used by HULP macros to communicate via bitbanged
 // I2C.
@@ -215,18 +216,18 @@ RTC_DATA_ATTR volatile bool buttonPressed = false;
 // HULP bitbanged I2C instruction. Writes a command to the MS5803 telling it to 
 // take a reading and produce a raw value (D1) that we can read with subsequent 
 // instructions. (OSR = 4096, see datasheet for details).
-RTC_DATA_ATTR ulp_var_t ulp_i2c_write_convertD1[] = {
+RTC_DATA_ATTR ulp_var_t ulp_i2c_write_convert_d1[] = {
     HULP_I2C_CMD_HDR(MS5803_I2C_ADDRESS, 0x48, 0),
 };
 // HULP bitbanged I2C instruction. Writes a command to the MS5803 telling it to
 // take a reading and produce a raw value (D2) that we can read with subsequent 
 // instructions. (OSR = 4096, see datasheet for details).
-RTC_DATA_ATTR ulp_var_t ulp_i2c_write_convertD2[] = {
+RTC_DATA_ATTR ulp_var_t ulp_i2c_write_convert_d2[] = {
     HULP_I2C_CMD_HDR(MS5803_I2C_ADDRESS, 0x58, 0),
 };
 // HULP bitbanged I2C instruction. Writes a command to the MS5803 telling it to
 // prepare to send the last raw reading (24 bits long).
-RTC_DATA_ATTR ulp_var_t ulp_i2c_write_readADC[] = {
+RTC_DATA_ATTR ulp_var_t ulp_i2c_write_read_adc[] = {
     HULP_I2C_CMD_HDR(MS5803_I2C_ADDRESS, 0x0, 0),
 };
 // HULP bitbanged I2C instruction. Reads a raw 24 bit value from the MS5803.
@@ -236,7 +237,7 @@ RTC_DATA_ATTR ulp_var_t ulp_i2c_read_sensor[HULP_I2C_CMD_BUF_SIZE(3)] = {
 // HULP bitbanged I2C instruction. Writes to the DS3231's status register, 
 // clearing it. This is done to clear an active alarm. If the state of the 
 // status register needs to be maintained, the ULP program must be modified.
-RTC_DATA_ATTR ulp_var_t ulp_i2c_write_clearAlarm[] = {
+RTC_DATA_ATTR ulp_var_t ulp_i2c_write_clear_alarm[] = {
     HULP_I2C_CMD_HDR(DS3231_I2C_ADDR, DS3231_STATUS_ADDR, 1),
     HULP_I2C_CMD_1B(0x0)
 };
@@ -245,8 +246,8 @@ RTC_DATA_ATTR ulp_var_t ulp_i2c_read_time[HULP_I2C_CMD_BUF_SIZE(7)] = {
     HULP_I2C_CMD_HDR(DS3231_I2C_ADDR, DS3231_TIME_CAL_ADDR, 7)
 };
 
-bool toggleLed = false;
-bool sdInitialized = false;
+bool toggle_led = false;
+bool sd_initialized = false;
 
 
 // Error codes for the program. The value associated with each enum is also the
@@ -275,9 +276,9 @@ void RTC_IRAM_ATTR esp_wake_deep_sleep(void) {
     esp_default_wake_deep_sleep();
     uint32_t wakeup_time = esp_cpu_get_cycle_count() / esp_rom_get_cpu_ticks_per_us();
     ESP_RTC_LOGI("Deep sleep wake stub started");
-    ESP_RTC_LOGI("ULP sample buffer offset is %d, time since boot is %ld us", ulpBufOffset.val, wakeup_time);
+    ESP_RTC_LOGI("ULP sample buffer offset is %d, time since boot is %ld us", ulp_sample_buffer_offset.val, wakeup_time);
 
-    memcpy(ulpBufferCopy, ulpBuffer, ULP_BUFFER_SIZE * sizeof(ulpBuffer[0]));
+    memcpy(ulp_sample_buffer_copy, ulp_sample_buffer, ULP_BUFFER_SIZE * sizeof(ulp_sample_buffer[0]));
 
     ESP_RTC_LOGI("Finished copying data from buffer (took %ld us)", esp_cpu_get_cycle_count() / esp_rom_get_cpu_ticks_per_us() - wakeup_time);
 
@@ -318,7 +319,7 @@ void RTC_IRAM_ATTR esp_wake_deep_sleep(void) {
     } while (state == ULP_STATE_RUNNING || state == ULP_STATE_WAKING);
     
     // Have the ULP start overwriting the sample buffer
-    ulpBufOffset.val = 0;
+    ulp_sample_buffer_offset.val = 0;
 
     ESP_RTC_LOGI("Deep sleep wake stub done (took %ld us)", esp_cpu_get_cycle_count() / esp_rom_get_cpu_ticks_per_us() - wakeup_time);
 }
@@ -340,13 +341,13 @@ void flash(uint8_t flash_count) {
 /*
  * NOTE: Don't call this function directly; use the ERROR macro.
  * Try to restart the device or enter an endless error loop otherwise, flashing
- * the LED in a given sequence to indicate the error. If attemptLogging == true,
+ * the LED in a given sequence to indicate the error. If attempt_logging == true,
  * we attempt to write diagnostic info to a log file on the SD card. If another
  * error is generated during this process, we ignore it and skip logging, 
  * indicating the original error on the LED.
  */
 [[noreturn]]
-void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
+void error(diy4_error_t error_num, size_t line, bool attempt_logging) {
     // Disable ULP wakeups
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     // Stop ULP after it finishes next cycle.
@@ -361,14 +362,14 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
             "ECHO_TO_SERIAL=%d\n"
             "MAX_RESTART_COUNT=%d\n"
             "BUFFER_SIZE=%d\n"
-            "deviceName=%s\n"
-            "outputFileName=%s\n"
-            "restartCount=%d\n"
-            "firstSampleTimestamp=%ld\n",
+            "device_name=%s\n"
+            "output_file_name=%s\n"
+            "restart_count=%d\n"
+            "first_sample_timestamp=%ld\n",
             //error_num, line, SD.cardSize(), SD.usedBytes(), ECHO_TO_SERIAL, 
             error_num, line, ECHO_TO_SERIAL, 
-            MAX_RESTART_COUNT, BUFFER_SIZE, deviceName, outputFileName,
-            restartCount, firstSampleTimestamp
+            MAX_RESTART_COUNT, BUFFER_SIZE, device_name, output_file_name,
+            restart_count, first_sample_timestamp
         );
         Serial.flush();
     #endif // ECHO_TO_SERIAL
@@ -381,34 +382,34 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
 
     // Attempt to log data to SD card (this won't always be possible e.g. if
     // there was an error connecting to the SD card).
-    if (attemptLogging) {
+    if (attempt_logging) {
         // First we'll try to get the time.
-        char timeString[16] = "unknown time";
+        char time_string[16] = "unknown time";
         // TODO: Fix this approach with better DS3231 lib.
 
-        ts timeNow{};
-        timeNow.sec = 61;
+        ts time_now{};
+        time_now.sec = 61;
         Wire.begin();
         digitalWrite(RTC_POWER_PIN, HIGH);
-        DS3231_get(&timeNow);
+        DS3231_get(&time_now);
 
-        // If we successfully got the time from the DS3231, overwrite timeString
+        // If we successfully got the time from the DS3231, overwrite time_string
         // with the actual time.
-        if (timeNow.sec != 61) {
-            snprintf(timeString, sizeof(timeString), "%04d%02d%02d %02d%02d%02d", timeNow.year % 10000u, timeNow.mon % 100u, timeNow.mday % 100u, timeNow.hour % 100u, timeNow.min % 100u, timeNow.sec % 100u);
+        if (time_now.sec != 61) {
+            snprintf(time_string, sizeof(time_string), "%04d%02d%02d %02d%02d%02d", time_now.year % 10000u, time_now.mon % 100u, time_now.mday % 100u, time_now.hour % 100u, time_now.min % 100u, time_now.sec % 100u);
         }
 
         // Then we'll try to open and write to a log file on the SD card
         // TODO: Perhaps save to ESP32 flash if we can't save to SD card?
         digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD power
         // if (SD.begin(SD_CS_PIN)) {
-        //     File logFile = SD.open(logFileName, FILE_APPEND, true);
+        //     File logFile = SD.open(log_file_name, FILE_APPEND, true);
         //     if (logFile) {
         //         #if ECHO_TO_SERIAL
         //             Serial.printf(
         //                 "Logging error to file: %s\n"
         //                 "\tTime: %s\n",
-        //                 logFileName, timeString
+        //                 log_file_name, time_string
         //             );
         //             Serial.flush();
         //         #endif // ECHO_TO_SERIAL
@@ -423,16 +424,16 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
         //             "ECHO_TO_SERIAL=%d\n"
         //             "MAX_RESTART_COUNT=%d\n"
         //             "BUFFER_SIZE=%d\n"
-        //             "deviceName=%s\n"
-        //             "outputFileName=%s\n"
-        //             "restartCount=%d\n"
-        //             "firstSampleTimestamp=%ld\n",
-        //             timeString, error_num, line, SD.cardSize(), SD.usedBytes(),
-        //             ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, deviceName,
-        //             outputFileName, restartCount, firstSampleTimestamp
+        //             "device_name=%s\n"
+        //             "output_file_name=%s\n"
+        //             "restart_count=%d\n"
+        //             "first_sample_timestamp=%ld\n",
+        //             time_string, error_num, line, SD.cardSize(), SD.usedBytes(),
+        //             ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, device_name,
+        //             output_file_name, restart_count, first_sample_timestamp
         //         );
 
-        //         if (restartCount < MAX_RESTART_COUNT) {
+        //         if (restart_count < MAX_RESTART_COUNT) {
         //             logFile.println("\nDEVICE WILL RESTART");
         //         } else {
         //             logFile.println("\nDEVICE WILL NOT RESTART");
@@ -444,7 +445,7 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
     }
 
     // Try to restart the device.
-    if (restartCount < MAX_RESTART_COUNT) {
+    if (restart_count < MAX_RESTART_COUNT) {
         for (uint8_t i = 0; i < 5; ++i) {
             digitalWrite(ERROR_LED_PIN, HIGH);
             delay(LED_FLASH_DURATION / 4);
@@ -455,7 +456,7 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
             Serial.println("Restarting");
             Serial.flush();
         #endif
-        ++restartCount;
+        ++restart_count;
         esp_restart();
     } else {
         #if ECHO_TO_SERIAL
@@ -470,12 +471,12 @@ void error(diy4_error_t error_num, size_t line, bool attemptLogging) {
 
 
 // Debugging utility function for monitory the ULP program while it is running
-void monitorULP() {
+void monitor_ulp() {
     ESP_LOGI("MONITOR", "starting");
 
     int old = 0;
     struct timeval tv_now;
-    gettimeofday(&tv_now, NULL);
+    gettimeofday(&tv_now, nullptr);
     int64_t last = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
     int64_t last_check = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
     int count = 0;
@@ -485,12 +486,12 @@ void monitorULP() {
     ESP_LOGI("MONITOR", "rtc_fast_freq = %ld", rtc_fast_freq_hz);
 
     while(1) {
-        gettimeofday(&tv_now, NULL);
-        if (ulpBufOffset.val != old) {
-            old = ulpBufOffset.val;
+        gettimeofday(&tv_now, nullptr);
+        if (ulp_sample_buffer_offset.val != old) {
+            old = ulp_sample_buffer_offset.val;
             int64_t time_us = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
             
-            ESP_LOGI("MONITOR", "delta_ms=%lld check_delta=%lld count=%d wait_cycles=%d wait_time_ms=%lu", (time_us - last) / 1000, (time_us - last_check) / 1000, count, ulp_wait_loop_iterations.val, ulp_wait_loop_iterations.val * 22 / (rtc_fast_freq_hz / 1000));
+            ESP_LOGI("MONITOR", "delta_ms=%lld check_delta=%lld count=%d ulp_processor_wait_cycles=%d wait_time_ms=%lu", (time_us - last) / 1000, (time_us - last_check) / 1000, count, ulp_wait_loop_iterations.val, ulp_wait_loop_iterations.val * 22 / (rtc_fast_freq_hz / 1000));
             last = time_us;
             count++;
         }
@@ -499,8 +500,8 @@ void monitorULP() {
         vTaskDelay(1);
 
         if (digitalRead(BUTTON_PIN) == 0) {
-            ulpBufOffset.val = 0;
-            ulpSamplesThisSecond.val = 0;
+            ulp_sample_buffer_offset.val = 0;
+            ulp_samples_this_second.val = 0;
             ESP_ERROR_CHECK(hulp_ulp_run(0));
         }
     }
@@ -511,10 +512,10 @@ void monitorULP() {
  * Define the ULP program, configure the ULP appropriately, and upload the 
  * program to the ULP. 
  */ 
-void initUlp()
+void ulp_init()
 {
     struct timeval tv_now;
-    gettimeofday(&tv_now, NULL);
+    gettimeofday(&tv_now, nullptr);
     int64_t start_time_us = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
     
     // Define labels used in the ULP program. They are not defined in any 
@@ -553,14 +554,14 @@ void initUlp()
     //   use bitbanged I2C on the ULP.
     const ulp_insn_t program[] = {
         I_MOVI(R1, 0),
-        I_GET(R0, R1, ulpSamplesThisSecond),
+        I_GET(R0, R1, ulp_samples_this_second),
         I_ADDI(R0, R0, 1),
-        I_PUT(R0, R1, ulpSamplesThisSecond),
+        I_PUT(R0, R1, ulp_samples_this_second),
         
         // Load the samples per second variable
         // (This variable doesn't change while in deep sleep, so we hardcode it
         // into the ULP program each time it is loaded)
-        I_MOVI(R2, samplesPerSecond),
+        I_MOVI(R2, samples_per_second),
 
         I_GET(R1, R1, ulp_wait_loop_iterations),
         I_MOVR(R3, R1), // Save this for later
@@ -581,7 +582,7 @@ void initUlp()
 
         M_LABEL(L_LAST_SAMPLE_THIS_SECOND),
         I_MOVI(R0, 0),
-        I_PUT(R0, R0, ulpSamplesThisSecond),
+        I_PUT(R0, R0, ulp_samples_this_second),
         
         // Wait until the RTC alarm is triggered and track how many 
         // times we loop. We'll use this to adjust the sleep delay if we're 
@@ -595,7 +596,7 @@ void initUlp()
         // If we get here, either we were perfectly on time or slow
         // Compensate: divide the remaining time (cycles) by the frequency 
         // and reduce the calibration delay by that amount.
-        I_RSHR(R1, R1, R2), // R2 is samplesPerSecond
+        I_RSHR(R1, R1, R2), // R2 is samples_per_second
         I_SUBR(R3, R3, R1), // R3 is ulp_wait_loop_iterations
         I_MOVI(R1, 0),
         I_PUT(R3, R1, ulp_wait_loop_iterations),
@@ -612,7 +613,7 @@ void initUlp()
 
         // Compensate: divide the cycles waited by the frequency and increase 
         // the calibration delay by that amount
-        I_RSHR(R1, R1, R2), // R2 is samplesPerSecond
+        I_RSHR(R1, R1, R2), // R2 is samples_per_second
         I_ADDR(R3, R3, R1), // R3 is ulp_wait_loop_iterations
         I_MOVI(R1, 0),
         I_PUT(R3, R1, ulp_wait_loop_iterations),
@@ -621,7 +622,7 @@ void initUlp()
         
         // Bitbanged I2C instruction: clear the DS3231's status register to 
         // reset the wakeup alarm.
-        I_MOVO(R1, ulp_i2c_write_clearAlarm),
+        I_MOVO(R1, ulp_i2c_write_clear_alarm),
         M_MOVL(R3, L_W_RETURN2),
         M_BX(L_WRITE),
         M_LABEL(L_W_RETURN2),
@@ -630,10 +631,10 @@ void initUlp()
 
         // Clear D2 read flag.
         I_MOVI(R0, 0),
-        I_PUT(R0, R0, ulpD2Flag),
+        I_PUT(R0, R0, ulp_d2_flag),
         
         // Issue I2C command to MS5803 to start ADC conversion
-        I_MOVO(R1, ulp_i2c_write_convertD1),
+        I_MOVO(R1, ulp_i2c_write_convert_d1),
         M_LABEL(L_LOOP_FOR_D2),     // Loop back here for D2 after D1
         M_MOVL(R3, L_W_RETURN0),
         M_BX(L_WRITE),
@@ -643,7 +644,7 @@ void initUlp()
         M_DELAY_US_5000_20000(ULP_MS5803_CONVERSION_DELAY_US),
 
         // Issue I2C command to prepare to read the ADC value
-        I_MOVO(R1, ulp_i2c_write_readADC),
+        I_MOVO(R1, ulp_i2c_write_read_adc),
         M_MOVL(R3, L_W_RETURN1),
         M_BX(L_WRITE),
         M_LABEL(L_W_RETURN1),
@@ -658,7 +659,7 @@ void initUlp()
 
         // Get the current buffer offset
         I_MOVI(R1, 0),
-        I_GET(R0, R1, ulpBufOffset),
+        I_GET(R0, R1, ulp_sample_buffer_offset),
         
         // Check if the buffer is full
         M_BGE(L_OVERFLOW, ULP_BUFFER_SIZE),
@@ -667,10 +668,10 @@ void initUlp()
         // buffer offset
         I_GET(R2, R1, ulp_i2c_read_sensor[HULP_I2C_CMD_DATA_OFFSET]),
         I_GET(R3, R1, ulp_i2c_read_sensor[HULP_I2C_CMD_DATA_OFFSET + 1]),
-        I_PUTO(R2, R0, 0, ulpBuffer),
-        I_PUTO(R3, R0, -1, ulpBuffer), // stores to ulpBuffer[offset + 1]
+        I_PUTO(R2, R0, 0, ulp_sample_buffer),
+        I_PUTO(R3, R0, -1, ulp_sample_buffer), // stores to ulp_sample_buffer[offset + 1]
         I_ADDI(R0, R0, 2),
-        I_PUT(R0, R1, ulpBufOffset),
+        I_PUT(R0, R1, ulp_sample_buffer_offset),
         M_BX(L_NO_OVERFLOW),
 
         // Otherwise if the buffer is full, increment the missed sample counter.
@@ -678,21 +679,21 @@ void initUlp()
         // slow to wake up for some reason, we don't want to overflow the 
         // buffer.
         M_LABEL(L_OVERFLOW),
-        I_GET(R0, R1, ulpSkippedSamples),
+        I_GET(R0, R1, ulp_skipped_samples),
         I_ADDI(R0, R0, 1),
-        I_PUT(R0, R1, ulpSkippedSamples),
+        I_PUT(R0, R1, ulp_skipped_samples),
 
         M_LABEL(L_NO_OVERFLOW),
 
         // Loop back and repeat for D2 if it hasn't been read yet. If D2 was 
         // just read, jump past next block.
-        I_GET(R0, R1, ulpD2Flag),
+        I_GET(R0, R1, ulp_d2_flag),
         M_BGE(L_D2_ALREADY_READ, 1),
 
         // Set D2 flag before branching to get D2.
         I_MOVI(R3, 1),
-        I_PUT(R3, R1, ulpD2Flag),
-        I_MOVO(R1, ulp_i2c_write_convertD2),
+        I_PUT(R3, R1, ulp_d2_flag),
+        I_MOVO(R1, ulp_i2c_write_convert_d2),
         M_BX(L_LOOP_FOR_D2),
 
         // Branch here if we've already read D2.
@@ -701,7 +702,7 @@ void initUlp()
         // Check if the buffer is full and respond accordingly (i.e. wake up
         // processor and end ULP program until it is restarted by the main 
         // processor).
-        I_GET(R0, R1, ulpBufOffset),
+        I_GET(R0, R1, ulp_sample_buffer_offset),
         M_BL(L_DONE, ULP_BUFFER_SIZE),
 
         I_MOVO(R1, ulp_i2c_read_time),
@@ -727,21 +728,19 @@ void initUlp()
 
     hulp_peripherals_on();
 
-    uint32_t wait_cycles = (hulp_get_fast_clk_freq() / 1000) * (ULP_WAIT_LOOP_TOTAL_TIME_MS
-     / samplesPerSecond);
-    ulp_wait_loop_iterations.val = wait_cycles / ULP_CYCLES_PER_WAIT_LOOP;
-    ESP_LOGI(TAG, "Number of ULP wait loops per sample: %d", ulp_wait_loop_iterations.val);
+    uint32_t ulp_processor_wait_cycles = (hulp_get_fast_clk_freq() / 1000) * (ULP_WAIT_LOOP_TOTAL_TIME_MS / samples_per_second);
+    ulp_wait_loop_iterations.val = ulp_processor_wait_cycles / ULP_CYCLES_PER_WAIT_LOOP;
+    ESP_LOGI(TAG, "Number of ULP wait loop iterations per sample: %d", ulp_wait_loop_iterations.val);
    
     // Determine how long the ULP should sleep between samples to achieve the 
     // desired sample frequency. This isn't perfect, but the ULP will actively 
     // compensate as it starts sampling.
-    uint32_t ulp_sleep_duration_us = ((1000 / samplesPerSecond) - (ULP_WAIT_LOOP_TOTAL_TIME_MS / samplesPerSecond)) * 1000 - ULP_PROGRAM_DURATION_US;
+    uint32_t ulp_sleep_duration_us = ((1000 / samples_per_second) - (ULP_WAIT_LOOP_TOTAL_TIME_MS / samples_per_second)) * 1000 - ULP_PROGRAM_DURATION_US;
     ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), ulp_sleep_duration_us, 0));
 
-    gettimeofday(&tv_now, NULL);
+    gettimeofday(&tv_now, nullptr);
     int64_t time_now_us = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
-    vTaskDelay(((ulp_sleep_duration_us - (time_now_us - start_time_us)) / 1000) * portTICK_PERIOD_MS);
-    
+    vTaskDelay(pdMS_TO_TICKS((ulp_sleep_duration_us - (time_now_us - start_time_us)) / 1000));
     
     ESP_ERROR_CHECK(hulp_ulp_run(0));
 }
@@ -798,7 +797,7 @@ void shutdown() {
 }
 
 
-bool sdInit() {
+bool sd_init() {
     esp_err_t ret;
 
     // Options for mounting the filesystem.
@@ -843,12 +842,11 @@ bool sdInit() {
     slot_config.host_id = (spi_host_device_t) host.slot;
 
     ESP_LOGI(TAG, "Mounting filesystem");
-    ret = esp_vfs_fat_sdspi_mount(sdMountPoint, &host, &slot_config, &mount_config, &card);
+    ret = esp_vfs_fat_sdspi_mount(sd_mount_point, &host, &slot_config, &mount_config, &card);
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
-            ESP_LOGE(TAG, "Failed to mount filesystem. "
-                     "If you want the card to be formatted, set the CONFIG_EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.");
+            ESP_LOGE(TAG, "Failed to mount filesystem");
         } else {
             ESP_LOGE(TAG, "Failed to initialize the card (%s). "
                      "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(ret));
@@ -859,13 +857,13 @@ bool sdInit() {
 
     // Card has been initialized, print its properties
     // sdmmc_card_print_info(stdout, card);
-    sdInitialized = true;
+    sd_initialized = true;
     return true;
 }
 
 
-DWORD sdGetUsed() {
-    if (!sdInitialized) {
+DWORD sd_get_used() {
+    if (!sd_initialized) {
         return 0;
     }
 
@@ -885,10 +883,10 @@ DWORD sdGetUsed() {
 }
 
 
-void sdDeinit() {
-    esp_vfs_fat_sdcard_unmount(sdMountPoint, card);
+void sd_deinit() {
+    esp_vfs_fat_sdcard_unmount(sd_mount_point, card);
     spi_bus_free(sdspi_device_config.host_id);
-    sdInitialized = false;
+    sd_initialized = false;
 }
 
 
@@ -968,19 +966,19 @@ bool parse_config(FILE* config_file) {
         ESP_LOGW(TAG_CONFIG, "Invalid sample frequency: %d. Must be 1, 2, or 4", sample_frequency_num);
         return false;
     } 
-    strncpy(deviceName, device_name_buf, device_name_buf_len);
-    samplesPerSecond = sample_frequency_num;
+    strncpy(device_name, device_name_buf, device_name_buf_len);
+    samples_per_second = sample_frequency_num;
     return true;
 }
 
 
-void IRAM_ATTR buttonInterrupt() {
-    buttonPressed = true;
+void IRAM_ATTR button_interrupt() {
+    button_pressed = true;
 }
 
 
 extern "C" void app_main() {
-    bool buttonPressedAtStartup = false;
+    bool button_pressed_at_startup = false;
 
     // pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
@@ -991,7 +989,7 @@ extern "C" void app_main() {
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     // After setup, the button can be used to safely "shut down" the ESP32 and 
     // disable active peripherals.
-    attachInterrupt(BUTTON_PIN, buttonInterrupt, FALLING);
+    attachInterrupt(BUTTON_PIN, button_interrupt, FALLING);
     // Using ext1 instead of ext0 because of a bug that prevents ext0 and ULP
     // interrupts from being used together.
     esp_sleep_enable_ext1_wakeup(((uint64_t) 0b1) << BUTTON_PIN, ESP_EXT1_WAKEUP_ALL_LOW);
@@ -1000,9 +998,9 @@ extern "C" void app_main() {
     // powered or just woke up from deep sleep. 
     switch (esp_reset_reason()) {   
         case ESP_RST_POWERON: {
-            restartCount = 0;
+            restart_count = 0;
             if (digitalRead(BUTTON_PIN) == LOW) {
-                buttonPressedAtStartup = true;
+                button_pressed_at_startup = true;
                 ESP_LOGI(TAG, "Button press detected at startup. Device will enter server mode after initializing");
             }
         }
@@ -1032,23 +1030,23 @@ extern "C" void app_main() {
             DS3231_clear_a2f();
 
             // Set the current day value.
-            struct ts timeNow;
-            DS3231_get(&timeNow);
-            oldDay = timeNow.mday;
+            struct ts time_now;
+            DS3231_get(&time_now);
+            old_day = time_now.mday;
 
-            ESP_LOGI(TAG, "RTC initialized. Time is %d-%02d-%02d %02d:%02d:%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+            ESP_LOGI(TAG, "RTC initialized. Time is %d-%02d-%02d %02d:%02d:%02d", time_now.year, time_now.mon, time_now.mday, time_now.hour, time_now.min, time_now.sec);
 
             // TODO: Check Status register as well, as it indicates if time was 
             // set since powered on (See #1)
-            if (timeNow.year < 2025) {
+            if (time_now.year < 2025) {
                 ESP_LOGW(TAG, "RTC time is out of date. Setting year to 2000 for UNIX time compatibility");
-                timeNow.year = 2000;
-                DS3231_set(timeNow);
-                ESP_LOGW(TAG, "New RTC time is %d-%02d-%02d %02d:%02d:%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+                time_now.year = 2000;
+                DS3231_set(time_now);
+                ESP_LOGW(TAG, "New RTC time is %d-%02d-%02d %02d:%02d:%02d", time_now.year, time_now.mon, time_now.mday, time_now.hour, time_now.min, time_now.sec);
             }
 
             // Only start the alarm if we aren't going into server mode.
-            if (!buttonPressedAtStartup) {
+            if (!button_pressed_at_startup) {
                 ESP_LOGI(TAG, "Starting RTC once-per-second alarm");
                 // Start the once-per-second alarm on the DS3231:
                 // These flags set the alarm to be in once-per-second mode.
@@ -1062,48 +1060,51 @@ extern "C" void app_main() {
             }
 
             // Initialize and mount the SD card
-            sdInit();
-            uint64_t sdCapacityKb = ((uint64_t) card->csd.capacity) * card->csd.sector_size / 1024;
-            ESP_LOGI(TAG, "Card size: %llu KiB", sdCapacityKb);
-            uint32_t sdUsedKb = sdGetUsed() / 1024;
-            ESP_LOGI(TAG, "Card used: %lu KiB", sdUsedKb);
+            if (!sd_init()) {
+                ERROR(sdInitError, false);
+            }
+            uint64_t sd_capacity_kb = ((uint64_t) card->csd.capacity) * card->csd.sector_size / 1024;
+            ESP_LOGI(TAG, "Card size: %llu KiB", sd_capacity_kb);
+            uint32_t sd_used_kb = sd_get_used() / 1024;
+            ESP_LOGI(TAG, "Card used: %lu KiB", sd_used_kb);
             
 
             // Get config from SD card or use default.
             ESP_LOGI(TAG, "Looking for config file at " CONFIG_FILE);
             FILE* config = fopen(CONFIG_FILE, "r");
             bool config_error = false;
-            if (config == nullptr ) {
+            if (config == nullptr) {
                 ESP_LOGW(TAG, "Unable to find config file");
                 config_error = true;
             } else if (!parse_config(config)) {
                 config_error = true;
             } 
+            fclose(config);
+            config = nullptr;
 
             if (config_error) {
-                strcpy(deviceName, DEFAULT_DEVICE_NAME);
-                strcpy(logFileName, DEFAULT_LOG_FILE_NAME);
-                samplesPerSecond = MAX_SAMPLES_PER_SECOND;
+                strcpy(device_name, DEFAULT_DEVICE_NAME);
+                strcpy(log_file_name, DEFAULT_LOG_FILE_NAME);
+                samples_per_second = MAX_SAMPLES_PER_SECOND;
                 ESP_LOGW(TAG, "Using default config values");
                 flash(sdConfigWarning);
             }
-            config = nullptr;
-            ESP_LOGI(TAG, "Device name is %s", deviceName);
-            ESP_LOGI(TAG, "Sample frequency is %d Hz", samplesPerSecond);
+            ESP_LOGI(TAG, "Device name is %s", device_name);
+            ESP_LOGI(TAG, "Sample frequency is %d Hz", samples_per_second);
 
-            snprintf(logFileName, LOG_FILE_NAME_SIZE, LOG_FILE_NAME_PREFIX "%s" LOG_FILE_NAME_SUFFIX, deviceName);
-            ESP_LOGI(TAG, "Log file name will be %s", logFileName);
+            snprintf(log_file_name, LOG_FILE_NAME_SIZE, LOG_FILE_NAME_PREFIX "%s" LOG_FILE_NAME_SUFFIX, device_name);
+            ESP_LOGI(TAG, "Log file name will be %s", log_file_name);
             
             // Generate the first file.
             ESP_LOGI(TAG, "Creating first data output file");
-            snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, timeNow.year % 10000, timeNow.mon % 100, timeNow.mday % 100, timeNow.hour % 100, timeNow.min % 100);
-            FILE* f = fopen(outputFileName, "w");
+            snprintf(output_file_name, FILE_NAME_SIZE, FILE_NAME_FORMAT, device_name, time_now.year % 10000, time_now.mon % 100, time_now.mday % 100, time_now.hour % 100, time_now.min % 100);
+            FILE* f = fopen(output_file_name, "w");
             if (f == nullptr) {
                 ERROR(sdFileError, true);
             }
             fclose(f);
             f = nullptr;
-            ESP_LOGI(TAG, "First data output file is %s", outputFileName);
+            ESP_LOGI(TAG, "First data output file is %s", output_file_name);
             
             ESP_LOGI(TAG, "Initializing MS5803 pressure sensor");
             if (!sensor.initializeMS_5803(false)) {
@@ -1115,14 +1116,14 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Pressure: %f mbar \tTemperature: %f deg C", sensor.pressure(), sensor.temperature());
 
             ESP_LOGI(TAG, "Writing diagnostics to log file");
-            FILE* logFile = fopen(logFileName, "a");
-            if (!logFile) {
+            FILE* log_file = fopen(log_file_name, "a");
+            if (!log_file) {
                 ERROR(sdFileError, false);
             }
 
             const esp_app_desc_t* app_info = esp_app_get_description();
 
-            fprintf(logFile,
+            fprintf(log_file,
                 "\nSETUP COMPLETE\n"
                 "RTC Time: %d-%02d-%02d %02d:%02d:%02d\n"
                 "Sample Pressure: %f mbar\n"
@@ -1135,23 +1136,23 @@ extern "C" void app_main() {
                 "MAX_RESTART_COUNT=%d\n"
                 "BUFFER_SIZE=%d\n"
                 "CONFIG_FILE=" CONFIG_FILE "\n"
-                "logFileName=%s\n"
+                "log_file_name=%s\n"
                 "deviceName=%s\n"
-                "outputFileName=%s\n"
-                "restartCount=%d\n"
-                "firstSampleTimestamp=%ld\n",
-                timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, 
-                timeNow.min, timeNow.sec, sensor.pressure(), 
-                sensor.temperature(), app_info->version, sdCapacityKb, sdUsedKb,
-                ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, logFileName,
-                deviceName, outputFileName, restartCount, firstSampleTimestamp
+                "output_file_name=%s\n"
+                "restart_count=%d\n"
+                "first_sample_timestamp=%ld\n",
+                time_now.year, time_now.mon, time_now.mday, time_now.hour, 
+                time_now.min, time_now.sec, sensor.pressure(), 
+                sensor.temperature(), app_info->version, sd_capacity_kb, sd_used_kb,
+                ECHO_TO_SERIAL, MAX_RESTART_COUNT, BUFFER_SIZE, log_file_name,
+                device_name, output_file_name, restart_count, first_sample_timestamp
             );
-            fclose(logFile);
-            logFile = nullptr;
+            fclose(log_file);
+            log_file = nullptr;
 
             // Deinitialize the SD card if we're going into dashboard server mode
-            if (!buttonPressedAtStartup) {
-                sdDeinit();
+            if (!button_pressed_at_startup) {
+                sd_deinit();
             }
 
             // Flash LED's to signal successful startup.
@@ -1160,9 +1161,9 @@ extern "C" void app_main() {
             delay(3000);
             digitalWrite(ERROR_LED_PIN, LOW);
 
-            if (buttonPressedAtStartup) {
+            if (button_pressed_at_startup) {
                 ESP_LOGI(TAG, "Entering server mode");
-                startDashboard();          
+                start_dashboard();          
             }
 
             // TODO: only if DIY4 
@@ -1170,18 +1171,18 @@ extern "C" void app_main() {
 
             digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
 
-            DS3231_get(&timeNow);
+            DS3231_get(&time_now);
             // Save a timestamp for the first sample. We'll add 1 second
             // (alarmStatus) to the time since the first sample will actually be
             // taken during the next second.
-            firstSampleTimestamp = timeNow.unixtime + 1;
+            first_sample_timestamp = time_now.unixtime + 1;
 
-            ESP_LOGI(TAG, "Time is %d-%02d-%02d %02d:%02d:%02d", timeNow.year, timeNow.mon, timeNow.mday, timeNow.hour, timeNow.min, timeNow.sec);
+            ESP_LOGI(TAG, "Time is %d-%02d-%02d %02d:%02d:%02d", time_now.year, time_now.mon, time_now.mday, time_now.hour, time_now.min, time_now.sec);
             
             // Wait the rest of this second to start.
             ESP_LOGI(TAG, "Waiting for next second and clearing alarm"); 
-            while (timeNow.unixtime < firstSampleTimestamp) {
-                DS3231_get(&timeNow);
+            while (time_now.unixtime < first_sample_timestamp) {
+                DS3231_get(&time_now);
             }
             DS3231_clear_a1f();
 
@@ -1190,15 +1191,15 @@ extern "C" void app_main() {
             // Disable power to the DS3231's VCC.
             digitalWrite(RTC_POWER_PIN, LOW);
            
-            restartCount = 0;
+            restart_count = 0;
 
             // Start the ULP program.
             ESP_LOGI(TAG, "Starting ULP");
-            initUlp();
+            ulp_init();
 
             ESP_LOGI(TAG, "Setup complete!");
 
-            // monitorULP();
+            // monitor_ulp();
             
             // Allow the ULP to trigger the ESP32 to wake up.
             ESP_LOGI(TAG, "Going to sleep");
@@ -1219,25 +1220,25 @@ extern "C" void app_main() {
                 default: break;
             }
 
-            ESP_LOGI(TAG, "Missed %d samples", ulpSkippedSamples.val);
-            ulpSkippedSamples.val = 0;
+            ESP_LOGI(TAG, "Missed %d samples", ulp_skipped_samples.val);
+            ulp_skipped_samples.val = 0;
             // TODO: Write 0s for missed samples
 
             // Buffer to store the processed data that will be written to flash.
-            entry_t writeBuffer[BUFFER_SIZE];
+            entry_t write_buffer[BUFFER_SIZE];
 
             // Process all the raw data using the conversion sequence specified
             // in the MS5803 datasheet. 
             for (uint16_t i = 0, j = 0; i < BUFFER_SIZE; i++, j += ULP_SAMPLE_SIZE) {
                 // Read the next D1 value from the raw data.
-                uint32_t varD1 = (ulpBufferCopy[j].val << 8) | (ulpBufferCopy[j + 1].val >> 8);
+                uint32_t var_d1 = (ulp_sample_buffer_copy[j].val << 8) | (ulp_sample_buffer_copy[j + 1].val >> 8);
                 // Read the next D2 value from the raw data.
-                uint32_t varD2 = (ulpBufferCopy[j + 2].val << 8) | (ulpBufferCopy[j + 3].val >> 8);
+                uint32_t var_d2 = (ulp_sample_buffer_copy[j + 2].val << 8) | (ulp_sample_buffer_copy[j + 3].val >> 8);
 
                 // Convert raw D1 and D2 to pressure and temperature.
-                sensor.convertRaw(varD1, varD2);
+                sensor.convertRaw(var_d1, var_d2);
                 // Write the processed data to the buffer.
-                writeBuffer[i] = {
+                write_buffer[i] = {
                     .pressure = sensor.pressure(),
                     .temperature = (int8_t) sensor.temperature()
                 };
@@ -1245,37 +1246,37 @@ extern "C" void app_main() {
 
             // Save the buffer to flash:
             ESP_LOGI(TAG, "Dumping to card");
-            ESP_LOGI(TAG, "First Timestamp=%ld", firstSampleTimestamp);
+            ESP_LOGI(TAG, "First Timestamp=%ld", first_sample_timestamp);
             ESP_LOGI(TAG, "P\t\tT");
             for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
-                ESP_LOGI(TAG, "%.2f \t%u", writeBuffer[i].pressure, writeBuffer[i].temperature);
+                ESP_LOGI(TAG, "%.2f \t%u", write_buffer[i].pressure, write_buffer[i].temperature);
             }
 
             // Reinitialize connection with SD card.
             ESP_LOGI(TAG, "Turning on SD power");
             digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD card power
             delay(100); // Some sensors were erroring here, so maybe delay is needed?
-            if (!sdInit()) {
+            if (!sd_init()) {
                 ERROR(sdInitError, false);
             }
 
-            ESP_LOGI(TAG, "Card capacity used: %ld KiB", sdGetUsed() / 1024);
+            ESP_LOGI(TAG, "Card capacity used: %ld KiB", sd_get_used() / 1024);
 
             // Open a file for logging the data. If it's the first dump of
             // the day, start a new file.
             // TODO: Write buffered data before starting new day
-            FILE* f = fopen(outputFileName, "a");
+            FILE* f = fopen(output_file_name, "a");
             if (f == nullptr) {
                 ERROR(sdFileError, true);
             }
             // Write timestamp of first sample.
-            size_t written = fwrite(&firstSampleTimestamp, sizeof(firstSampleTimestamp), 1, f) * sizeof(firstSampleTimestamp);
+            size_t written = fwrite(&first_sample_timestamp, sizeof(first_sample_timestamp), 1, f) * sizeof(first_sample_timestamp);
             // Write the data buffer as a sequence of bytes (it's vital that
             // the entry_t struct is packed, otherwise there will be garbage
             // bytes in between each entry that will waste space). In order
             // to use this data later, we'll have to unpack it using a 
             // postprocessing script.
-            written += fwrite(writeBuffer, sizeof(writeBuffer[0]), BUFFER_SIZE, f) * sizeof(writeBuffer[0]);
+            written += fwrite(write_buffer, sizeof(write_buffer[0]), BUFFER_SIZE, f) * sizeof(write_buffer[0]);
             fclose(f);
             f = nullptr;
             
@@ -1301,34 +1302,34 @@ extern "C" void app_main() {
             timestamp.tm_hour = hours;
             timestamp.tm_min = minutes;
             timestamp.tm_sec = seconds;
-            time_t unixTimestamp = mktime(&timestamp);
+            time_t unix_timestamp = mktime(&timestamp);
 
             // Save a timestamp for the first sample of the next batch.
-            firstSampleTimestamp = unixTimestamp;
+            first_sample_timestamp = unix_timestamp;
 
             // If a new day has started, start a new data file for the next 
             // cycle.
-            if (oldDay != day_of_month) {
+            if (old_day != day_of_month) {
                 // Generate a new file name with the current date and time.
-                snprintf(outputFileName, FILE_NAME_SIZE, FILE_NAME_FORMAT, deviceName, year % 10000, month % 100, day_of_month % 100, hours % 100, minutes % 100);
+                snprintf(output_file_name, FILE_NAME_SIZE, FILE_NAME_FORMAT, device_name, year % 10000, month % 100, day_of_month % 100, hours % 100, minutes % 100);
                 // Start a new file.
-                f = fopen(outputFileName, "w");
+                f = fopen(output_file_name, "w");
                 if (f == nullptr) {
                     ERROR(sdFileError, true);
                 }
                 fclose(f);
                 f = nullptr;
-                oldDay = day_of_month;
+                old_day = day_of_month;
             } 
 
-            sdDeinit();
+            sd_deinit();
             ESP_LOGI(TAG, "Turning off SD power in %d ms", SD_OFF_DELAY_MS);
             delay(SD_OFF_DELAY_MS);
             digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
 
             ESP_LOGI(TAG, "Going to sleep...");
 
-            if (buttonPressed) {
+            if (button_pressed) {
                 shutdown();
             }
 
@@ -1373,8 +1374,8 @@ void wifi_init_softap()
             WIFI_EVENT,
             ESP_EVENT_ANY_ID,
             &wifi_event_handler,
-            NULL,
-            NULL
+            nullptr,
+           nullptr 
         )
     );
 
@@ -1386,7 +1387,7 @@ void wifi_init_softap()
     wifi_ap_config.ap.max_connection = 2;
     wifi_ap_config.ap.pmf_cfg.required =true;
 
-    strcpy((char*) wifi_ap_config.ap.ssid, deviceName);
+    strcpy((char*) wifi_ap_config.ap.ssid, device_name);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_config));
@@ -1407,11 +1408,11 @@ static esp_err_t http_get_index_handler(httpd_req_t* req) {
 static esp_err_t http_get_api_clock_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
 
-    struct ts timeNow;
-    DS3231_get(&timeNow);
+    struct ts time_now;
+    DS3231_get(&time_now);
 
     char json[32] = {0};
-    int json_len = snprintf(json, sizeof(json), "{\"clock_time\": %ld}\n", timeNow.unixtime);
+    int json_len = snprintf(json, sizeof(json), "{\"clock_time\": %ld}\n", time_now.unixtime);
 
     httpd_resp_set_status(req, HTTPD_200);
     httpd_resp_set_type(req, "application/json");
@@ -1443,8 +1444,8 @@ static esp_err_t http_get_api_sensor_handler(httpd_req_t* req) {
 static esp_err_t http_get_api_all_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
 
-    struct ts timeNow;
-    DS3231_get(&timeNow);
+    struct ts time_now;
+    DS3231_get(&time_now);
     sensor.readSensor();
 
     char json[256] = {0};
@@ -1453,16 +1454,16 @@ static esp_err_t http_get_api_all_handler(httpd_req_t* req) {
         sizeof(json), 
         "{" 
             "\"device_name\": \"%s\","
-            "\"storage_capacity\": %u,"
+            "\"storage_capacity\": %llu,"
             "\"storage_used\": %lu,"
             "\"clock_time\": %ld,"
             "\"sensor_pressure\": %.1f," 
             "\"sensor_temperature\": %.1f"
         "}",
-        deviceName,
-        card->csd.capacity, 
-        sdGetUsed(),
-        timeNow.unixtime,
+        device_name,
+        (uint64_t) card->csd.capacity * card->csd.sector_size, 
+        sd_get_used(),
+        time_now.unixtime,
         sensor.pressure(), 
         sensor.temperature()
     );
@@ -1479,7 +1480,7 @@ static esp_err_t http_get_api_sample_frequency_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
 
     char json[64] = {0};
-    int json_len = snprintf(json, sizeof(json), "{\"sample_frequency\": %d}", samplesPerSecond);
+    int json_len = snprintf(json, sizeof(json), "{\"sample_frequency\": %d}", samples_per_second);
 
     httpd_resp_set_status(req, HTTPD_200);
     httpd_resp_set_type(req, "application/json");
@@ -1549,39 +1550,39 @@ static const httpd_uri_t http_get_index = {
     .uri = "/",
     .method = HTTP_GET,
     .handler = http_get_index_handler,
-    .user_ctx = NULL,
+    .user_ctx = nullptr,
 };
 
 static const httpd_uri_t http_get_api_clock = {
     .uri = "/api/clock",
     .method = HTTP_GET,
     .handler = http_get_api_clock_handler,
-    .user_ctx = NULL,
+    .user_ctx = nullptr,
 };
 
 static const httpd_uri_t http_get_api_sensor = {
     .uri = "/api/sensor",
     .method = HTTP_GET,
     .handler = http_get_api_sensor_handler,
-    .user_ctx = NULL,
+    .user_ctx = nullptr,
 };
 
 static const httpd_uri_t http_get_api_all = {
     .uri = "/api/all",
     .method = HTTP_GET,
     .handler = http_get_api_all_handler,
-    .user_ctx = NULL,
+    .user_ctx = nullptr,
 };
 
 static const httpd_uri_t http_post_api_clock = {
     .uri = "/api/clock",
     .method = HTTP_POST,
     .handler = http_post_api_clock_handler,
-    .user_ctx = NULL,
+    .user_ctx = nullptr,
 };
 
-httpd_handle_t startServer() {
-    httpd_handle_t server = NULL;
+httpd_handle_t start_server() {
+    httpd_handle_t server = nullptr;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();    
 
     config.lru_purge_enable = true;
@@ -1601,14 +1602,11 @@ httpd_handle_t startServer() {
     }
 
     ESP_LOGI(TAG, "Error starting server!");
-    return NULL;
+    return nullptr;
 }
 
 
-void startDashboard() {
-    // Reset CPU frequency to default so WiFi stuff functions properly.
-    setCpuFrequencyMhz(240);
-
+void start_dashboard() {
     //Initialize NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -1621,12 +1619,12 @@ void startDashboard() {
     ESP_LOGI(TAG, "ESP_WIFI_MODE_AP");
     wifi_init_softap();
     
-    startServer();
+    start_server();
 
     bool led_on = false;
     // TODO: DNS server
     while (1) {
-        vTaskDelay(SERVER_MODE_LED_FLASH_PERIOD_MS / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(SERVER_MODE_LED_FLASH_PERIOD_MS));
 
         if (led_on) {
             digitalWrite(ERROR_LED_PIN, LOW);
