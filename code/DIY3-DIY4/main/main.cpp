@@ -114,7 +114,7 @@
 
 // Number of readings (pressure and temperature) to store in a buffer before we 
 // dump to the SD card.
-#define BUFFER_SIZE 200
+#define BUFFER_SIZE 440
 static_assert(BUFFER_SIZE % MAX_SAMPLES_PER_SECOND == 0, "BUFFER_SIZE must be a multiple of MAX_SAMPLES_PER_SECOND");
 // Number of ulp_var_t's needed for one raw pressure and temperature reading.
 // (24 bits for raw pressure, 24 bits for raw temperature; could be packed 
@@ -157,6 +157,12 @@ struct entry_t {
 sdmmc_card_t* card;
 sdspi_device_config_t sdspi_device_config = SDSPI_DEVICE_CONFIG_DEFAULT();
 char sd_mount_point[] = SD_MOUNT_POINT;
+
+// Buffer to use for storing data to be written to the SD card. We allocate it
+// as a global variable to avoid stack overflow, which would otherwise happen
+// (with the default stack size of under 4K) with a buffer size a bit bigger 
+// than 200.
+entry_t write_buffer[BUFFER_SIZE];
 
 // Button press flag, set when the extra button on the FireBeetle is pressed.
 RTC_FAST_ATTR volatile bool button_pressed = false;
@@ -1223,9 +1229,6 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Missed %d samples", ulp_skipped_samples.val);
             ulp_skipped_samples.val = 0;
             // TODO: Write 0s for missed samples
-
-            // Buffer to store the processed data that will be written to flash.
-            entry_t write_buffer[BUFFER_SIZE];
 
             // Process all the raw data using the conversion sequence specified
             // in the MS5803 datasheet. 
