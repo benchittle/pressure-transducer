@@ -127,6 +127,11 @@ static_assert(BUFFER_SIZE % MAX_SAMPLES_PER_SECOND == 0, "BUFFER_SIZE must be a 
 // power to the SD card.
 #define SD_OFF_DELAY_MS 2000
 
+// If set to 1, whenever the device wakes up it will print all pressure readings
+// to serial. This can take substantial time (a second or two) which could be
+// saved to reduce power consumption. Set to 0 to disable.
+#define LOG_PRESSURE_ON_WAKE 0
+
 #define WIFI_SERVER_PORT 80
 #define DNS_SERVER_PORT 53
 
@@ -142,17 +147,6 @@ static const char* TAG_DASHBOARD = "dashboard";
 // TODO: Move all WiFi / dashboard functionality to its own file
 void start_dashboard();
 
-
-// A custom struct to store a single data entry.
-// NOTE: __attribute__((packed)) tells the compiler not to add additional 
-// padding bytes that would align to the nearest 4 bytes. This can cause issues
-// in some cases, but the ESP32 doesn't seem to have a problem with it. By doing
-// this, we reduce the size of each entry from 12 bytes to 9 bytes.
-struct entry_t {
-    float pressure;
-    int8_t temperature;
-} __attribute__((packed));
-
 // Globals for SD card
 sdmmc_card_t* card;
 sdspi_device_config_t sdspi_device_config = SDSPI_DEVICE_CONFIG_DEFAULT();
@@ -162,7 +156,7 @@ char sd_mount_point[] = SD_MOUNT_POINT;
 // as a global variable to avoid stack overflow, which would otherwise happen
 // (with the default stack size of under 4K) with a buffer size a bit bigger 
 // than 200.
-entry_t write_buffer[BUFFER_SIZE];
+float write_buffer[BUFFER_SIZE];
 
 // Button press flag, set when the extra button on the FireBeetle is pressed.
 RTC_FAST_ATTR volatile bool button_pressed = false;
@@ -1241,20 +1235,23 @@ extern "C" void app_main() {
                 // Convert raw D1 and D2 to pressure and temperature.
                 sensor.convertRaw(var_d1, var_d2);
                 // Write the processed data to the buffer.
-                write_buffer[i] = {
-                    .pressure = sensor.pressure(),
-                    .temperature = (int8_t) sensor.temperature()
-                };
+                write_buffer[i] = sensor.pressure();
             }
+            float last_sample_temperature = sensor.temperature();
 
             // Save the buffer to flash:
             ESP_LOGI(TAG, "Dumping to card");
             ESP_LOGI(TAG, "First Timestamp=%ld", first_sample_timestamp);
-            ESP_LOGI(TAG, "P\t\tT");
-            for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
-                ESP_LOGI(TAG, "%.2f \t%u", write_buffer[i].pressure, write_buffer[i].temperature);
-            }
-
+            #if LOG_PRESSURE_ON_WAKE
+                ESP_LOGI(TAG, "Pressure (mbar)");
+                for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
+                    ESP_LOGI(TAG, "%.2f", write_buffer[i]);
+                }
+            #else 
+                ESP_LOGI(TAG, "First pressure sample: %.2f mbar", write_buffer[0]);
+            #endif
+            ESP_LOGI(TAG, "Temperature at last sample: %.2f degrees C", last_sample_temperature);
+            
             // Reinitialize connection with SD card.
             ESP_LOGI(TAG, "Turning on SD power");
             digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD card power
@@ -1280,6 +1277,7 @@ extern "C" void app_main() {
             // to use this data later, we'll have to unpack it using a 
             // postprocessing script.
             written += fwrite(write_buffer, sizeof(write_buffer[0]), BUFFER_SIZE, f) * sizeof(write_buffer[0]);
+            written += fwrite(&last_sample_temperature, sizeof(last_sample_temperature), 1, f) * sizeof(first_sample_timestamp);
             fclose(f);
             f = nullptr;
             
