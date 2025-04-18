@@ -2,4 +2,3 @@
 code/.build/
 *.code-workspace
 __pycache__
-code/scripts/set_time_ntp/secrets.h
