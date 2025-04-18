@@ -201,6 +201,7 @@ RTC_DATA_ATTR ulp_var_t ulp_sample_buffer[ULP_BUFFER_SIZE];
 RTC_FAST_ATTR ulp_var_t ulp_sample_buffer_copy[ULP_BUFFER_SIZE];
 // Used to index the ULP's buffer in the ULP program.
 RTC_DATA_ATTR ulp_var_t ulp_sample_buffer_offset{};
+RTC_FAST_ATTR uint16_t ulp_end_sample_buffer_offset;
 // Flag used in the ULP program to track whether the MS5803's raw D2 value has
 // been read.
 RTC_DATA_ATTR ulp_var_t ulp_d2_flag{};
@@ -324,6 +325,9 @@ void RTC_IRAM_ATTR esp_wake_deep_sleep(void) {
         }
     } while (state == ULP_STATE_RUNNING || state == ULP_STATE_WAKING);
     
+    // Save the offset so we know how many samples to copy (the only time the 
+    // buffer shouldn't be full is when the shutdown button is pressed).
+    ulp_end_sample_buffer_offset = ulp_sample_buffer_offset.val;
     // Have the ULP start overwriting the sample buffer
     ulp_sample_buffer_offset.val = 0;
 
@@ -1210,7 +1214,6 @@ extern "C" void app_main() {
 
             ESP_LOGI(TAG, "Time is %d-%02d-%02d %02d:%02d:%02d", time_now.year, time_now.mon, time_now.mday, time_now.hour, time_now.min, time_now.sec);
             
-            // Wait the rest of this second to start.
             ESP_LOGI(TAG, "Waiting for next second and clearing alarm"); 
             while (time_now.unixtime < first_sample_timestamp) {
                 DS3231_get(&time_now);
@@ -1218,13 +1221,11 @@ extern "C" void app_main() {
             DS3231_clear_a1f();
 
             ESP_LOGI(TAG, "Disabling DS3231 pin power");
-
-            // Disable power to the DS3231's VCC.
             digitalWrite(RTC_POWER_PIN, LOW);
            
+            // Reset the restart count if a succesful startup occurs.
             restart_count = 0;
 
-            // Start the ULP program.
             ESP_LOGI(TAG, "Starting ULP");
             ulp_init();
 
@@ -1235,6 +1236,7 @@ extern "C" void app_main() {
             // Allow the ULP to trigger the ESP32 to wake up.
             ESP_LOGI(TAG, "Going to sleep");
             ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
+            
             // Enter deep sleep.
             esp_deep_sleep_start();
         }
@@ -1244,11 +1246,13 @@ extern "C" void app_main() {
         case ESP_RST_DEEPSLEEP: {
             ESP_LOGI(TAG, "Awake!");
 
-            // If the shutdown button was pushed while the device was in deep 
-            // sleep, stop sampling and shut down.
-            switch(esp_sleep_get_wakeup_cause()) {
-                case ESP_SLEEP_WAKEUP_EXT1: shutdown();
-                default: break;
+            // Shutdown button was pressed
+            if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
+                hulp_ulp_end();
+                ESP_LOGI(TAG, "Shutdown button was pressed"); 
+                button_pressed = true;
+                // Wait until ULP is done running so we don't miss a sample
+                while (hulp_get_state() == ULP_STATE_RUNNING);
             }
 
             ESP_LOGI(TAG, "Missed %d samples", ulp_skipped_samples.val);
@@ -1263,7 +1267,8 @@ extern "C" void app_main() {
             sensor.convertRaw(var_d1, var_d2);
             const float first_sample_temperature = sensor.temperature();
             // Then loop through for all the pressures.
-            for (uint16_t i = 0, j = 0; i < BUFFER_SIZE; i++, j += ULP_SAMPLE_SIZE) {
+            uint16_t num_samples = 0;
+            for (uint16_t j = 0; j < ulp_end_sample_buffer_offset; num_samples++, j += ULP_SAMPLE_SIZE) {
                 // Read the next D1 value from the raw data.
                 uint32_t var_d1 = (ulp_sample_buffer_copy[j].val << 8) | (ulp_sample_buffer_copy[j + 1].val >> 8);
                 // Read the next D2 value from the raw data.
@@ -1272,12 +1277,14 @@ extern "C" void app_main() {
                 // Convert raw D1 and D2 to pressure and temperature.
                 sensor.convertRaw(var_d1, var_d2);
                 // Write the processed data to the buffer.
-                write_buffer[i] = sensor.pressure();
+                write_buffer[num_samples] = sensor.pressure();
             }
+
 
             ESP_LOGI(TAG, "Dumping to card");
             ESP_LOGI(TAG, "First Timestamp=%ld", first_sample_timestamp);
             ESP_LOGI(TAG, "Temperature at first sample: %.2f degrees C", first_sample_temperature);
+            ESP_LOGI(TAG, "Number of samples: %d", num_samples);
             #if LOG_PRESSURE_ON_WAKE
                 ESP_LOGI(TAG, "Pressure (mbar)");
                 for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
@@ -1308,54 +1315,57 @@ extern "C" void app_main() {
             // (4 bytes) goes first, followed by BUFFER_SIZE pressure readings
             // (4 bytes each).
             written += fwrite(&first_sample_temperature, sizeof(first_sample_temperature), 1, f) * sizeof(first_sample_timestamp);
-            written += fwrite(write_buffer, sizeof(write_buffer[0]), BUFFER_SIZE, f) * sizeof(write_buffer[0]);
+            written += fwrite(write_buffer, sizeof(write_buffer[0]), num_samples, f) * sizeof(write_buffer[0]);
             fclose(f);
             f = nullptr;
             
             ESP_LOGI(TAG, "Wrote %u bytes to file", written);
 
-            // Right before the ULP wakes up the main processor, it reads and 
-            // stores the time from the DS3231. We decode that here (assuming 
-            // some things e.g. 24 hour time).
-            uint8_t seconds = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 8 & 0xf);
-            uint8_t minutes = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 4 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val & 0xf);
-            uint8_t hours = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 1].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 1].val >> 8 & 0xf);
-            uint8_t day_of_month = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 8 & 0xf);
-            uint8_t month = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 4 & 1) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val & 0xf);
-            uint16_t year = 1900 
-                + 100 * (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 7 & 1) 
-                + 10 * (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET+ 3].val >> 12 & 0xf)
-                + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET+ 3].val >> 8 & 0xf);
-            
-            tm timestamp{};
-            timestamp.tm_year = year - 1900; // years since 1900
-            timestamp.tm_mon = month - 1; // months since January
-            timestamp.tm_mday = day_of_month;
-            timestamp.tm_hour = hours;
-            timestamp.tm_min = minutes;
-            timestamp.tm_sec = seconds;
-            time_t unix_timestamp = mktime(&timestamp);
+            // We can skip this chunk of code if we're about to shut down
+            if (!button_pressed) {
+                // Right before the ULP wakes up the main processor, it reads and 
+                // stores the time from the DS3231. We decode that here (assuming 
+                // some things e.g. 24 hour time).
+                uint8_t seconds = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 8 & 0xf);
+                uint8_t minutes = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 4 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val & 0xf);
+                uint8_t hours = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 1].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 1].val >> 8 & 0xf);
+                uint8_t day_of_month = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 8 & 0xf);
+                uint8_t month = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 4 & 1) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val & 0xf);
+                uint16_t year = 1900 
+                    + 100 * (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 7 & 1) 
+                    + 10 * (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET+ 3].val >> 12 & 0xf)
+                    + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET+ 3].val >> 8 & 0xf);
+                
+                tm timestamp{};
+                timestamp.tm_year = year - 1900; // years since 1900
+                timestamp.tm_mon = month - 1; // months since January
+                timestamp.tm_mday = day_of_month;
+                timestamp.tm_hour = hours;
+                timestamp.tm_min = minutes;
+                timestamp.tm_sec = seconds;
+                time_t unix_timestamp = mktime(&timestamp);
 
-            // Save a timestamp for the first sample of the next batch.
-            first_sample_timestamp = unix_timestamp;
+                // Save a timestamp for the first sample of the next batch.
+                first_sample_timestamp = unix_timestamp;
 
-            // If a new day has started, start a new data file for the next 
-            // cycle.
-            if (old_day != day_of_month) {
-                // Generate a new file name with the current date and time.
-                snprintf(output_file_name, FILE_NAME_SIZE, FILE_NAME_FORMAT, device_name, year % 10000, month % 100, day_of_month % 100, hours % 100, minutes % 100);
-                // Start a new file.
-                f = fopen(output_file_name, "w");
-                if (f == nullptr) {
-                    ERROR(sdFileError, true);
-                }
-                if (write_data_header(f) != DATA_HEADER_SIZE) {
-                    ERROR(sdFileError, true);
+                // If a new day has started, start a new data file for the next 
+                // cycle.
+                if (old_day != day_of_month) {
+                    // Generate a new file name with the current date and time.
+                    snprintf(output_file_name, FILE_NAME_SIZE, FILE_NAME_FORMAT, device_name, year % 10000, month % 100, day_of_month % 100, hours % 100, minutes % 100);
+                    // Start a new file.
+                    f = fopen(output_file_name, "w");
+                    if (f == nullptr) {
+                        ERROR(sdFileError, true);
+                    }
+                    if (write_data_header(f) != DATA_HEADER_SIZE) {
+                        ERROR(sdFileError, true);
+                    } 
+                    fclose(f);
+                    f = nullptr;
+                    old_day = day_of_month;
                 } 
-                fclose(f);
-                f = nullptr;
-                old_day = day_of_month;
-            } 
+            }
 
             sd_deinit();
             ESP_LOGI(TAG, "Turning off SD power in %d ms", SD_OFF_DELAY_MS);
@@ -1364,8 +1374,10 @@ extern "C" void app_main() {
 
             ESP_LOGI(TAG, "Going to sleep...");
 
+            // If the shutdown button was pushed while the device was in deep 
+            // sleep, stop sampling and shut down.
             if (button_pressed) {
-                shutdown();
+               shutdown();
             }
 
             // Allow the ULP to trigger the ESP32 to wake up.
