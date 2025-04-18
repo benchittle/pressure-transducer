@@ -72,7 +72,7 @@
 #define FILE_NAME_PREFIX_MAX_LEN (SD_MOUNT_POINT_LEN + 1 + DEVICE_NAME_SIZE)
 #define FILE_NAME_SUFFIX_FORMAT "_%04d%02d%02d-%02d%02d.data"
 #define FILE_NAME_SUFFIX_LEN 19
-// The format for data files is: /sd/DEVICENAME_YYYYMMDD-hhmm.data
+// The format for data file names is: /sd/DEVICENAME_YYYYMMDD-hhmm.data
 #define FILE_NAME_FORMAT FILE_NAME_PREFIX_FORMAT FILE_NAME_SUFFIX_FORMAT
 
 // Maximum length of file name string (including null terminator)
@@ -91,6 +91,12 @@
 #define LOG_FILE_NAME_SIZE ((sizeof(DEFAULT_LOG_FILE_NAME) >= sizeof(LOG_FILE_NAME_PREFIX LOG_FILE_NAME_SUFFIX) + DEVICE_NAME_SIZE - 1) ? \
     sizeof(DEFAULT_LOG_FILE_NAME): \
     sizeof(LOG_FILE_NAME_PREFIX LOG_FILE_NAME_SUFFIX) + DEVICE_NAME_SIZE - 1)
+
+// Data files use a header to describe their contents. Every data file starts 
+// with a 4 character string of the format 'Vxxx' where x is a digit. Header 
+// and body formats are documented on the GitHub repository.
+#define DATA_HEADER_VERSION_STRING "V000"
+#define DATA_HEADER_SIZE 7
 
 #define ULP_MS5803_CONVERSION_DELAY_US 10000
 
@@ -972,6 +978,28 @@ bool parse_config(FILE* config_file) {
 }
 
 
+/* Writes header information to the provided file pointer, which should point to
+ * the top of the file. All headers start with a 4 byte version string: "Vxxx"
+ * where x is a digit '0' to '9'.
+ * Everything after is subject to change. Header / body formats should be
+ * documented on the GitHub repo by header version. 
+ */
+size_t write_data_header(FILE* f) {
+    size_t bytes_written = 0;
+    // Write the version string first. Don't include the null terminator.
+    bytes_written += fwrite(DATA_HEADER_VERSION_STRING, sizeof(char), sizeof(DATA_HEADER_VERSION_STRING) - 1, f) * sizeof(char);
+    
+    // The 2nd field (1 byte) is the sampling rate.
+    bytes_written += fwrite(&samples_per_second, sizeof(samples_per_second), 1, f) * sizeof(samples_per_second);
+
+    // The 3rd field (2 bytes) is the number of samples per dump to the SD card.
+    const uint16_t buffer_size = BUFFER_SIZE;
+    bytes_written += fwrite(&buffer_size, sizeof(buffer_size), 1, f) * sizeof(buffer_size);
+
+    return bytes_written;
+}
+
+
 void IRAM_ATTR button_interrupt() {
     button_pressed = true;
 }
@@ -1102,6 +1130,9 @@ extern "C" void app_main() {
             if (f == nullptr) {
                 ERROR(sdFileError, true);
             }
+            if (write_data_header(f) != DATA_HEADER_SIZE) {
+                ERROR(sdFileError, true);
+            } 
             fclose(f);
             f = nullptr;
             ESP_LOGI(TAG, "First data output file is %s", output_file_name);
@@ -1226,6 +1257,12 @@ extern "C" void app_main() {
 
             // Process all the raw data using the conversion sequence specified
             // in the MS5803 datasheet. 
+            // First, save the first reading's temperature.
+            uint32_t var_d1 = (ulp_sample_buffer_copy[0].val << 8) | (ulp_sample_buffer_copy[1].val >> 8);
+            uint32_t var_d2 = (ulp_sample_buffer_copy[2].val << 8) | (ulp_sample_buffer_copy[3].val >> 8);
+            sensor.convertRaw(var_d1, var_d2);
+            const float first_sample_temperature = sensor.temperature();
+            // Then loop through for all the pressures.
             for (uint16_t i = 0, j = 0; i < BUFFER_SIZE; i++, j += ULP_SAMPLE_SIZE) {
                 // Read the next D1 value from the raw data.
                 uint32_t var_d1 = (ulp_sample_buffer_copy[j].val << 8) | (ulp_sample_buffer_copy[j + 1].val >> 8);
@@ -1237,11 +1274,10 @@ extern "C" void app_main() {
                 // Write the processed data to the buffer.
                 write_buffer[i] = sensor.pressure();
             }
-            float last_sample_temperature = sensor.temperature();
 
-            // Save the buffer to flash:
             ESP_LOGI(TAG, "Dumping to card");
             ESP_LOGI(TAG, "First Timestamp=%ld", first_sample_timestamp);
+            ESP_LOGI(TAG, "Temperature at first sample: %.2f degrees C", first_sample_temperature);
             #if LOG_PRESSURE_ON_WAKE
                 ESP_LOGI(TAG, "Pressure (mbar)");
                 for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
@@ -1250,7 +1286,6 @@ extern "C" void app_main() {
             #else 
                 ESP_LOGI(TAG, "First pressure sample: %.2f mbar", write_buffer[0]);
             #endif
-            ESP_LOGI(TAG, "Temperature at last sample: %.2f degrees C", last_sample_temperature);
             
             // Reinitialize connection with SD card.
             ESP_LOGI(TAG, "Turning on SD power");
@@ -1262,22 +1297,18 @@ extern "C" void app_main() {
 
             ESP_LOGI(TAG, "Card capacity used: %ld KiB", sd_get_used() / 1024);
 
-            // Open a file for logging the data. If it's the first dump of
-            // the day, start a new file.
-            // TODO: Write buffered data before starting new day
+            // Open the current data file.
             FILE* f = fopen(output_file_name, "a");
             if (f == nullptr) {
                 ERROR(sdFileError, true);
             }
-            // Write timestamp of first sample.
+            // Write timestamp of first sample (4 bytes).
             size_t written = fwrite(&first_sample_timestamp, sizeof(first_sample_timestamp), 1, f) * sizeof(first_sample_timestamp);
-            // Write the data buffer as a sequence of bytes (it's vital that
-            // the entry_t struct is packed, otherwise there will be garbage
-            // bytes in between each entry that will waste space). In order
-            // to use this data later, we'll have to unpack it using a 
-            // postprocessing script.
+            // Write the data to the file in binary format. The temperature 
+            // (4 bytes) goes first, followed by BUFFER_SIZE pressure readings
+            // (4 bytes each).
+            written += fwrite(&first_sample_temperature, sizeof(first_sample_temperature), 1, f) * sizeof(first_sample_timestamp);
             written += fwrite(write_buffer, sizeof(write_buffer[0]), BUFFER_SIZE, f) * sizeof(write_buffer[0]);
-            written += fwrite(&last_sample_temperature, sizeof(last_sample_temperature), 1, f) * sizeof(first_sample_timestamp);
             fclose(f);
             f = nullptr;
             
@@ -1318,6 +1349,9 @@ extern "C" void app_main() {
                 if (f == nullptr) {
                     ERROR(sdFileError, true);
                 }
+                if (write_data_header(f) != DATA_HEADER_SIZE) {
+                    ERROR(sdFileError, true);
+                } 
                 fclose(f);
                 f = nullptr;
                 old_day = day_of_month;
