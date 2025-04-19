@@ -1,17 +1,16 @@
 // ESP IDF libraries
-#include "esp_log.h"
-#include "esp_vfs_fat.h"
-#include "sdmmc_cmd.h"
-#include "ulp.h"
-
-#include "nvs_flash.h"
-#include "esp_netif.h"
-#include "esp_event.h"
-#include "esp_wifi.h"
-#include "esp_http_server.h"
-#include "soc/rtc.h"
-#include "esp_wake_stub.h"
 #include "esp_app_desc.h"
+#include "esp_event.h"
+#include "esp_http_server.h"
+#include "esp_log.h"
+#include "esp_netif.h"
+#include "esp_vfs_fat.h"
+#include "esp_wake_stub.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
+#include "sdmmc_cmd.h"
+#include "soc/rtc.h"
+#include "ulp.h"
 
 // Arduino libraries
 #include "SPI.h"
@@ -194,6 +193,11 @@ RTC_FAST_ATTR uint8_t samples_per_second = MAX_SAMPLES_PER_SECOND;
 // time the buffer is dumped.
 RTC_FAST_ATTR uint32_t first_sample_timestamp;
 
+// Set in the deep sleep wake stub. Controls whether the main task needs to
+// resynchronize with the ULP when a sample was skipped or the ULP was already
+// awake during the deep sleep wake stub.
+RTC_FAST_ATTR bool ulp_sample_buffer_offset_was_reset;
+
 // An array for the ULP to buffer raw sensor data while the main processor is in
 // deep sleep. Once full, the data will be processed into meaningful pressure
 // and temperature values and written to flash storage.
@@ -211,7 +215,7 @@ RTC_DATA_ATTR ulp_var_t ulp_samples_this_second{};
 // If the main processor takes too long to wake up, the ULP will record how 
 // many samples it would have taken instead of taking samples to avoid 
 // overwriting the buffer before it has been copied.
-RTC_DATA_ATTR ulp_var_t ulp_skipped_samples{};
+RTC_DATA_ATTR ulp_var_t ulp_skipped_readings{};
 // The number of iterations of the wait loop the ULP should perform to sync 
 // with the DS3231. This value is adjusted by the ULP to compensate when running
 // fast or slow.
@@ -283,6 +287,7 @@ void RTC_IRAM_ATTR esp_wake_deep_sleep(void) {
     esp_default_wake_deep_sleep();
     uint32_t wakeup_time = esp_cpu_get_cycle_count() / esp_rom_get_cpu_ticks_per_us();
     ESP_RTC_LOGI("Deep sleep wake stub started");
+
     ESP_RTC_LOGI("ULP sample buffer offset is %d, time since boot is %ld us", ulp_sample_buffer_offset.val, wakeup_time);
 
     memcpy(ulp_sample_buffer_copy, ulp_sample_buffer, ULP_BUFFER_SIZE * sizeof(ulp_sample_buffer[0]));
@@ -295,41 +300,50 @@ void RTC_IRAM_ATTR esp_wake_deep_sleep(void) {
     // If a sample is missed, it is possible that the ULP is still in the middle 
     // of its program when we get to this part of the stub. To avoid an edge 
     // case, we don't want to reset the buffer offset to 0 until the ULP is 
-    // asleep, so we'll wait until then.
-    do {
-        uint32_t ulp_state_bits = REG_READ(RTC_CNTL_LOW_POWER_ST_REG) & (0xF << 13);
-        switch(ulp_state_bits)
-        {
-            case 0:
-                state = ULP_STATE_IDLE;
-                break;
-            case BIT(13) |  BIT(14):
-                state = ULP_STATE_RUNNING;
-                break;
-            case BIT(13) |  BIT(14) |             BIT(16):
-                state = ULP_STATE_HALTED;
-                break;
-            case                        BIT(15) | BIT(16):
-                state = ULP_STATE_SLEEPING;
-                break;
-            case            BIT(14) |             BIT(16):
-            case            BIT(14) |   BIT(15) | BIT(16):
-            case BIT(13) |  BIT(14) |   BIT(15) | BIT(16): //if sleep time ~0
-                state = ULP_STATE_WAKING;
-                break;
-            case                                  BIT(16):
-                state = ULP_STATE_DONE;
-                break;
-            default:
-                state = ULP_STATE_UNKNOWN;
-        }
-    } while (state == ULP_STATE_RUNNING || state == ULP_STATE_WAKING);
-    
-    // Save the offset so we know how many samples to copy (the only time the 
-    // buffer shouldn't be full is when the shutdown button is pressed).
+    // asleep, so we'll wait until then. Also, if a sample was skipped, we want 
+    // to wait until the start of a new second to avoid some complications with 
+    // how timestamps are recorded.
+    uint32_t ulp_state_bits = REG_READ(RTC_CNTL_LOW_POWER_ST_REG) & (0xF << 13);
+    switch(ulp_state_bits) {
+        case 0:
+            state = ULP_STATE_IDLE;
+            break;
+        case BIT(13) |  BIT(14):
+            state = ULP_STATE_RUNNING;
+            break;
+        case BIT(13) |  BIT(14) |             BIT(16):
+            state = ULP_STATE_HALTED;
+            break;
+        case                        BIT(15) | BIT(16):
+            state = ULP_STATE_SLEEPING;
+            break;
+        case            BIT(14) |             BIT(16):
+        case            BIT(14) |   BIT(15) | BIT(16):
+        case BIT(13) |  BIT(14) |   BIT(15) | BIT(16): //if sleep time ~0
+            state = ULP_STATE_WAKING;
+            break;
+        case                                  BIT(16):
+            state = ULP_STATE_DONE;
+            break;
+        default:
+            state = ULP_STATE_UNKNOWN;
+    }
+    // Save the offset so we know how many samples to copy (the only time 
+    // the buffer shouldn't be full is when the shutdown button is pressed).
     ulp_end_sample_buffer_offset = ulp_sample_buffer_offset.val;
-    // Have the ULP start overwriting the sample buffer
-    ulp_sample_buffer_offset.val = 0;
+
+    // If the ULP has not skipped any samples and is not already waking up / 
+    // running, we can safely reset the buffer offset and allow it to run again.
+    // Otherwise, we will need to handle resyncing with the ULP in the main task
+    // (doing it here could cause a watchdog reset). 
+    if (ulp_skipped_readings.val == 0 && state != ULP_STATE_WAKING && state != ULP_STATE_RUNNING) {
+        // Have the ULP start overwriting the sample buffer
+        ulp_sample_buffer_offset.val = 0;
+        ulp_sample_buffer_offset_was_reset = true;
+    } else {
+        ulp_sample_buffer_offset_was_reset = false;
+        ESP_RTC_LOGW("Samples were skipped or the ULP is already awake. Not resetting the buffer offset yet");
+    }
 
     ESP_RTC_LOGI("Deep sleep wake stub done (took %ld us)", esp_cpu_get_cycle_count() / esp_rom_get_cpu_ticks_per_us() - wakeup_time);
 }
@@ -689,9 +703,9 @@ void ulp_init()
         // slow to wake up for some reason, we don't want to overflow the 
         // buffer.
         M_LABEL(L_OVERFLOW),
-        I_GET(R0, R1, ulp_skipped_samples),
+        I_GET(R0, R1, ulp_skipped_readings),
         I_ADDI(R0, R0, 1),
-        I_PUT(R0, R1, ulp_skipped_samples),
+        I_PUT(R0, R1, ulp_skipped_readings),
 
         M_LABEL(L_NO_OVERFLOW),
 
@@ -715,6 +729,7 @@ void ulp_init()
         I_GET(R0, R1, ulp_sample_buffer_offset),
         M_BL(L_DONE, ULP_BUFFER_SIZE),
 
+        // Read the time from the DS3231 if the buffer is full
         I_MOVO(R1, ulp_i2c_read_time),
         M_MOVL(R3, L_R_RETURN2),
         M_BX(L_READ),
@@ -1254,25 +1269,44 @@ extern "C" void app_main() {
                 // Wait until ULP is done running so we don't miss a sample
                 while (hulp_get_state() == ULP_STATE_RUNNING);
             }
+            
+            // If samples were skipped or the ULP was already awake during the 
+            // deep sleep stub, wait until the next second then reset the sample
+            // buffer offset. 
+            if (!ulp_sample_buffer_offset_was_reset) {
+                ulp_state_t state;
+                do {
+                    state = hulp_get_state();
+                    vTaskDelay(1);
+                } while ((state == ULP_STATE_RUNNING || state == ULP_STATE_WAKING) 
+                    || ulp_skipped_readings.val % (2 * samples_per_second) != 0
+                );
 
-            ESP_LOGI(TAG, "Missed %d samples", ulp_skipped_samples.val);
-            ulp_skipped_samples.val = 0;
-            // TODO: Write 0s for missed samples
+                // Allow the ULP to start sampling again.
+                ulp_sample_buffer_offset.val = 0;
+
+                const time_t timestamp_offset = (ulp_skipped_readings.val / 2) / samples_per_second;
+                ESP_LOGW(TAG, "Missed %d samples. First sample timestamp will be offset by %lld seconds", ulp_skipped_readings.val / 2, timestamp_offset);
+                ulp_skipped_readings.val = 0;
+                first_sample_timestamp += timestamp_offset;
+            }
 
             // Process all the raw data using the conversion sequence specified
             // in the MS5803 datasheet. 
             // First, save the first reading's temperature.
-            uint32_t var_d1 = (ulp_sample_buffer_copy[0].val << 8) | (ulp_sample_buffer_copy[1].val >> 8);
-            uint32_t var_d2 = (ulp_sample_buffer_copy[2].val << 8) | (ulp_sample_buffer_copy[3].val >> 8);
-            sensor.convertRaw(var_d1, var_d2);
+            {
+                const uint32_t var_d1 = (ulp_sample_buffer_copy[0].val << 8) | (ulp_sample_buffer_copy[1].val >> 8);
+                const uint32_t var_d2 = (ulp_sample_buffer_copy[2].val << 8) | (ulp_sample_buffer_copy[3].val >> 8);
+                sensor.convertRaw(var_d1, var_d2);
+            }
             const float first_sample_temperature = sensor.temperature();
             // Then loop through for all the pressures.
             uint16_t num_samples = 0;
             for (uint16_t j = 0; j < ulp_end_sample_buffer_offset; num_samples++, j += ULP_SAMPLE_SIZE) {
                 // Read the next D1 value from the raw data.
-                uint32_t var_d1 = (ulp_sample_buffer_copy[j].val << 8) | (ulp_sample_buffer_copy[j + 1].val >> 8);
+                const uint32_t var_d1 = (ulp_sample_buffer_copy[j].val << 8) | (ulp_sample_buffer_copy[j + 1].val >> 8);
                 // Read the next D2 value from the raw data.
-                uint32_t var_d2 = (ulp_sample_buffer_copy[j + 2].val << 8) | (ulp_sample_buffer_copy[j + 3].val >> 8);
+                const uint32_t var_d2 = (ulp_sample_buffer_copy[j + 2].val << 8) | (ulp_sample_buffer_copy[j + 3].val >> 8);
 
                 // Convert raw D1 and D2 to pressure and temperature.
                 sensor.convertRaw(var_d1, var_d2);
