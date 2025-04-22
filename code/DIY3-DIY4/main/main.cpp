@@ -16,6 +16,9 @@
 #include "SPI.h"
 #include "Wire.h"
 
+// JSON parsing support
+#include "cJSON.h"
+
 // ULP macro programming utility functions.
 // https://github.com/boarchuz/HULP
 #include "hulp.h" 
@@ -78,7 +81,11 @@
 #define FILE_NAME_SIZE (FILE_NAME_PREFIX_MAX_LEN + FILE_NAME_SUFFIX_LEN + 1)
 
 // Path to config file on the SD card
-#define CONFIG_FILE SD_MOUNT_POINT "/config.txt"
+#define CONFIG_FILE SD_MOUNT_POINT "/config.json"
+#define CONFIG_FILE_BUFFER_SIZE 512
+
+#define TIMEZONE_OFFSET_STRING_LENGTH 9
+#define DEFAULT_TIMEZONE_OFFSET_STRING "UTC+00:00"
 
 // A log file will be created on the SD card for capturing diagnostics and 
 // errors. If the SD card has a config.txt file with a device name, the log
@@ -95,7 +102,6 @@
 // with a 4 character string of the format 'Vxxx' where x is a digit. Header 
 // and body formats are documented on the GitHub repository.
 #define DATA_HEADER_VERSION_STRING "V000"
-#define DATA_HEADER_SIZE 7
 
 #define ULP_MS5803_CONVERSION_DELAY_US 10000
 
@@ -116,6 +122,8 @@
 // Intended sampling rates are 1, 2, or 4 Hz. Could probably work with 8 Hz, any
 // higher might be unstable.
 #define MAX_SAMPLES_PER_SECOND 4
+#define VALID_SAMPLEING_FREQUENCIES "1, 2, 4"
+#define IS_VALID_SAMPLING_FREQUENCY(x) (x == 1 || x == 2 || x == 4)
 
 // Number of readings (pressure and temperature) to store in a buffer before we 
 // dump to the SD card.
@@ -175,6 +183,8 @@ RTC_FAST_ATTR char device_name[DEVICE_NAME_SIZE] = {0};
 RTC_FAST_ATTR char output_file_name[FILE_NAME_SIZE] = {0};
 // Store the name for the log file.
 RTC_FAST_ATTR char log_file_name[LOG_FILE_NAME_SIZE] = DEFAULT_LOG_FILE_NAME;
+// Store the timezone offset string: UTC+hh:mm or UTC-hh:mm
+RTC_FAST_ATTR char timezone_utc_offset_string[TIMEZONE_OFFSET_STRING_LENGTH + 1] = DEFAULT_TIMEZONE_OFFSET_STRING;
 
 // Track the number of times a custom error has been encountered causing the
 // device to restart.
@@ -349,6 +359,22 @@ void RTC_IRAM_ATTR esp_wake_deep_sleep(void) {
 }
 
 
+time_t ts_to_tm(ts ds3231_time, tm* system_time) {
+    tm t;
+    if (system_time == nullptr) {
+        system_time = &t;
+    }
+    system_time->tm_year = ds3231_time.year - 1900; // years since 1900
+    system_time->tm_mon = ds3231_time.mon - 1; // months since January
+    system_time->tm_mday = ds3231_time.mday;
+    system_time->tm_hour = ds3231_time.hour;
+    system_time->tm_min = ds3231_time.min;
+    system_time->tm_sec = ds3231_time.sec;
+
+    return mktime(system_time);
+}
+
+
 /*
  * Flash the error LED a given number of times to warn the user.
  */
@@ -499,7 +525,7 @@ void monitor_ulp() {
     ESP_LOGI("MONITOR", "starting");
 
     int old = 0;
-    struct timeval tv_now;
+    timeval tv_now;
     gettimeofday(&tv_now, nullptr);
     int64_t last = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
     int64_t last_check = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
@@ -538,7 +564,7 @@ void monitor_ulp() {
  */ 
 void ulp_init()
 {
-    struct timeval tv_now;
+    timeval tv_now;
     gettimeofday(&tv_now, nullptr);
     int64_t start_time_us = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
     
@@ -724,7 +750,6 @@ void ulp_init()
         M_LABEL(L_D2_ALREADY_READ),
 
         // Check if the buffer is full and respond accordingly (i.e. wake up
-        // processor and end ULP program until it is restarted by the main 
         // processor).
         I_GET(R0, R1, ulp_sample_buffer_offset),
         M_BL(L_DONE, ULP_BUFFER_SIZE),
@@ -916,83 +941,92 @@ void sd_deinit() {
 
 
 bool parse_config(FILE* config_file) {
-    static const char* TAG_CONFIG = "transducer_config";
-
-    enum {
-        SENSOR_NAME,
-        SENSOR_NAME_EOL,
-        SAMPLE_FREQUENCY,
-        DONE,
-    } state = SENSOR_NAME;
-
-    char device_name_buf[DEVICE_NAME_SIZE] = {0};
-    size_t device_name_buf_len = 0;
-    static const int MAX_SAMPLE_FREQUENCY_DIGITS = 3;
-    char sample_frequency_buf[MAX_SAMPLE_FREQUENCY_DIGITS + 1] = {0};
-    size_t sample_frequency_buf_len = 0;
-    
-    int c = fgetc(config_file);
-    if (c == EOF) {
-        ESP_LOGW(TAG_CONFIG, "Config file is empty");
+    static const char* TAG_CONFIG = "transducer-config";
+    char json_buffer[CONFIG_FILE_BUFFER_SIZE] = {0};
+    size_t bytes_read = fread(json_buffer, 1, sizeof(json_buffer) - 1, config_file);
+    if (bytes_read == 0) {
+        ESP_LOGW(TAG_CONFIG, "Failed to read anything from config file");
+        return false;
+    } else if (bytes_read == CONFIG_FILE_BUFFER_SIZE) {
+        ESP_LOGW(TAG_CONFIG, "Config file too large: max %d characters", CONFIG_FILE_BUFFER_SIZE - 1);
         return false;
     }
-    while (c != EOF) {
-        switch(state) {
-            case SENSOR_NAME: {
-                if (isalnum(c) || c == '-' || c == '_') {
-                    device_name_buf[device_name_buf_len++] = c;
-                } else if (c == ' ') {
-                    device_name_buf[device_name_buf_len++] = '_';
-                } else if (c == '\n') {
-                    state = SAMPLE_FREQUENCY;
-                } else if (!isspace(c)) {
-                    ESP_LOGW(TAG_CONFIG, "Device name is invalid");
-                    return false;
-                }
-                if (device_name_buf_len == 0) {
-                    ESP_LOGW(TAG_CONFIG, "Device name is invalid or missing");
-                    return false;
-                } else if (device_name_buf_len == DEVICE_NAME_SIZE - 1) {
-                    state = SENSOR_NAME_EOL;
-                }
-                break;
-            }
-            case SENSOR_NAME_EOL: {
-                if (c == '\n') {
-                    state = SAMPLE_FREQUENCY;
-                }
-                break;
-            }
-            case SAMPLE_FREQUENCY: {
-                if (isdigit(c)) {
-                    sample_frequency_buf[sample_frequency_buf_len++] = c;
-                } else if (c == '\n') {
-                    state = DONE;
-                } else if (c != '\r') {
-                    ESP_LOGW(TAG_CONFIG, "Failed to parse sample frequency from config file");
-                    return false;
-                }
-                if (sample_frequency_buf_len == MAX_SAMPLE_FREQUENCY_DIGITS) {
-                    state = DONE;
-                }
-                break;
-            }
-            case DONE: c = EOF;
+
+    cJSON* json_root = cJSON_Parse(json_buffer);
+    if (json_root == nullptr) {
+        const char *error_ptr = cJSON_GetErrorPtr();
+        if (error_ptr != nullptr) {
+            ESP_LOGW(TAG_CONFIG, "Error parsing JSON (before: %s)", error_ptr);
         }
-        c = fgetc(config_file);
-    };
-    
-    if (sample_frequency_buf_len == 0) {
-        ESP_LOGW(TAG_CONFIG, "Sample frequency is missing");
         return false;
     }
-    int sample_frequency_num = atoi(sample_frequency_buf);
-    if (sample_frequency_num != 1 && sample_frequency_num != 2 && sample_frequency_num != 4) {
-        ESP_LOGW(TAG_CONFIG, "Invalid sample frequency: %d. Must be 1, 2, or 4", sample_frequency_num);
+
+    // Read device name
+    const cJSON* json_device_name = cJSON_GetObjectItem(json_root, "device_name");
+    if (!cJSON_IsString(json_device_name) || json_device_name->valuestring == nullptr) {
+        ESP_LOGW(TAG_CONFIG, "Failed to read JSON field 'device_name'. Field value must be a string");
         return false;
-    } 
-    strncpy(device_name, device_name_buf, device_name_buf_len);
-    samples_per_second = sample_frequency_num;
+    }
+    // Validate
+    if (strlen(json_device_name->valuestring) >= DEVICE_NAME_SIZE) {
+        ESP_LOGW(TAG_CONFIG, "Device name is too long. Max %d characters", DEVICE_NAME_SIZE - 1);
+        return false;
+    }
+    for (char* c = json_device_name->valuestring; *c != '\0'; c++) {
+        if (!isalnum(*c) && *c != '-' && *c != '_') {
+            ESP_LOGW(TAG_CONFIG, "Device name contains invalid character: %c. Only alphanumeric characters, dashes, and underscores are allowed", *c);
+            return false;
+        }
+    }
+
+    // Read sample frequency
+    const cJSON* json_sample_frequency = cJSON_GetObjectItem(json_root, "sample_frequency_hz");
+    if (!cJSON_IsNumber(json_sample_frequency)) {
+        ESP_LOGW(TAG_CONFIG, "Failed to read JSON field 'sample_frequency_hz'. Field value must be numeric");
+        return false;
+    }
+    // Validate
+    if (!IS_VALID_SAMPLING_FREQUENCY(json_sample_frequency->valueint)) {
+        ESP_LOGW(TAG_CONFIG, "Invalid sampling frequency: %d. Valid values are: " VALID_SAMPLEING_FREQUENCIES, json_sample_frequency->valueint);
+        return false;
+    }
+
+    // Read timezone UTC offset
+    const cJSON* json_timezone_utc_offset = cJSON_GetObjectItem(json_root, "timezone_utc_offset");
+    if (!cJSON_IsString(json_timezone_utc_offset) || json_timezone_utc_offset->valuestring == nullptr) {
+        ESP_LOGW(TAG_CONFIG, "Failed to read JSON field 'timezone_utc_offset'. Field value must be a string");
+        return false;
+    }
+    // Validate
+    if (strlen(json_timezone_utc_offset->valuestring) != TIMEZONE_OFFSET_STRING_LENGTH) {
+        ESP_LOGW(TAG_CONFIG, "Timezone offset string invalid length. Expected length %d", TIMEZONE_OFFSET_STRING_LENGTH);
+        return false;
+    }
+    if (!(
+        strncmp(json_timezone_utc_offset->valuestring, "UTC", 3) == 0
+        && (json_timezone_utc_offset->valuestring[3] == '-' || json_timezone_utc_offset->valuestring[3] == '+')
+        && isdigit(json_timezone_utc_offset->valuestring[4])
+        && isdigit(json_timezone_utc_offset->valuestring[5])
+        && json_timezone_utc_offset->valuestring[6] == ':'
+        && isdigit(json_timezone_utc_offset->valuestring[7])
+        && isdigit(json_timezone_utc_offset->valuestring[8])
+    )) {
+        ESP_LOGW(TAG_CONFIG, "Timezone offset string '%s' is invalid. Must be of form 'UTC-hh:mm' or 'UTC+hh:mm'", json_timezone_utc_offset->valuestring);
+        return false;
+    }
+
+    // Set global config variables
+    strcpy(device_name, json_device_name->valuestring);
+    samples_per_second = json_sample_frequency->valueint;
+    strcpy(timezone_utc_offset_string, json_timezone_utc_offset->valuestring);
+
+    ESP_LOGI(TAG_CONFIG, "Device name is %s", device_name);
+    ESP_LOGI(TAG_CONFIG, "Sample frequency is %d Hz", samples_per_second);
+    ESP_LOGI(TAG_CONFIG, "Timezone offset string is %s", timezone_utc_offset_string);
+    
+    // Cleanup
+    cJSON_Delete(json_root);
+
     return true;
 }
 
@@ -1008,10 +1042,16 @@ size_t write_data_header(FILE* f) {
     // Write the version string first. Don't include the null terminator.
     bytes_written += fwrite(DATA_HEADER_VERSION_STRING, sizeof(char), sizeof(DATA_HEADER_VERSION_STRING) - 1, f) * sizeof(char);
     
-    // The 2nd field (1 byte) is the sampling rate.
+    // The 2nd field (DEVICE_NAME_SIZE==16 bytes) is the device name. Uses a null terminator.
+    bytes_written += fwrite(device_name, sizeof(char), sizeof(device_name), f) * sizeof(char);
+
+    // The 3rd field (1 byte) is the sampling rate.
     bytes_written += fwrite(&samples_per_second, sizeof(samples_per_second), 1, f) * sizeof(samples_per_second);
 
-    // The 3rd field (2 bytes) is the number of samples per dump to the SD card.
+    // The 4th field (TIMEZONE_OFFSET_STRING_LENGTH==9 bytes) is the timezone offset string. No null terminator.
+    bytes_written += fwrite(timezone_utc_offset_string, sizeof(char), TIMEZONE_OFFSET_STRING_LENGTH, f) * sizeof(char);
+
+    // The 5th field (2 bytes) is the number of samples per dump to the SD card.
     const uint16_t buffer_size = BUFFER_SIZE;
     bytes_written += fwrite(&buffer_size, sizeof(buffer_size), 1, f) * sizeof(buffer_size);
 
@@ -1077,7 +1117,7 @@ extern "C" void app_main() {
             DS3231_clear_a2f();
 
             // Set the current day value.
-            struct ts time_now;
+            ts time_now;
             DS3231_get(&time_now);
             old_day = time_now.mday;
 
@@ -1085,8 +1125,10 @@ extern "C" void app_main() {
 
             // TODO: Check Status register as well, as it indicates if time was 
             // set since powered on (See #1)
-            if (time_now.year < 2025) {
-                ESP_LOGW(TAG, "RTC time is out of date. Setting year to 2000 for UNIX time compatibility");
+            // Check to see if the date is earlier than the year in which the 
+            // program was compiled.
+            if (time_now.year < ('0' - __DATE__[8]) * 1000 + ('0' - __DATE__[9]) * 100 + ('0' - __DATE__[10]) * 10 + ('0' - __DATE__[11])) {
+                ESP_LOGW(TAG, "RTC time is out of date. Setting year to 2000");
                 time_now.year = 2000;
                 DS3231_set(time_now);
                 ESP_LOGW(TAG, "New RTC time is %d-%02d-%02d %02d:%02d:%02d", time_now.year, time_now.mon, time_now.mday, time_now.hour, time_now.min, time_now.sec);
@@ -1136,8 +1178,16 @@ extern "C" void app_main() {
                 ESP_LOGW(TAG, "Using default config values");
                 flash(sdConfigWarning);
             }
-            ESP_LOGI(TAG, "Device name is %s", device_name);
-            ESP_LOGI(TAG, "Sample frequency is %d Hz", samples_per_second);
+
+            ESP_LOGI(TAG, "Setting timezone and system time");
+            DS3231_get(&time_now);
+            timeval system_timeval{
+                .tv_sec = ts_to_tm(time_now, nullptr),
+                .tv_usec = 0,
+            };
+            setenv("TZ", timezone_utc_offset_string, 1);
+            tzset();
+            settimeofday(&system_timeval, nullptr);
 
             snprintf(log_file_name, LOG_FILE_NAME_SIZE, LOG_FILE_NAME_PREFIX "%s" LOG_FILE_NAME_SUFFIX, device_name);
             ESP_LOGI(TAG, "Log file name will be %s", log_file_name);
@@ -1149,7 +1199,7 @@ extern "C" void app_main() {
             if (f == nullptr) {
                 ERROR(sdFileError, true);
             }
-            if (write_data_header(f) != DATA_HEADER_SIZE) {
+            if (write_data_header(f) == 0) {
                 ERROR(sdFileError, true);
             } 
             fclose(f);
@@ -1262,12 +1312,15 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Awake!");
 
             // Shutdown button was pressed
+            bool shutting_down = false;
             if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
                 hulp_ulp_end();
                 ESP_LOGI(TAG, "Shutdown button was pressed"); 
                 button_pressed = true;
+                shutting_down = true;
                 // Wait until ULP is done running so we don't miss a sample
-                while (hulp_get_state() == ULP_STATE_RUNNING);
+                ulp_state_t state = hulp_get_state();
+                while (state == ULP_STATE_RUNNING || state == ULP_STATE_WAKING);
             }
             
             // If samples were skipped or the ULP was already awake during the 
@@ -1285,11 +1338,50 @@ extern "C" void app_main() {
                 // Allow the ULP to start sampling again.
                 ulp_sample_buffer_offset.val = 0;
 
-                const time_t timestamp_offset = (ulp_skipped_readings.val / 2) / samples_per_second;
-                ESP_LOGW(TAG, "Missed %d samples. First sample timestamp will be offset by %lld seconds", ulp_skipped_readings.val / 2, timestamp_offset);
+                ESP_LOGW(TAG, "Missed %d samples", ulp_skipped_readings.val / 2);
                 ulp_skipped_readings.val = 0;
-                first_sample_timestamp += timestamp_offset;
-            }
+            } 
+
+            ts ds3231_time{};
+            time_t ds3231_time_unix_timestamp = 0;
+            timeval system_timeval{};
+            // If we woke up from a shutdown, the ULP probably wouldn't have
+            // read the time. Since it's now shutdown, we can do that safely 
+            // here. Otherwise, use the time read by the ULP.
+            if (shutting_down) {
+                Wire.begin();
+                DS3231_get(&ds3231_time);
+                system_timeval.tv_sec = ts_to_tm(ds3231_time, nullptr);
+            } else {
+                // Right before the ULP wakes up the main processor, it reads and 
+                // stores the time from the DS3231. We decode that here (assuming 
+                // some things e.g. 24 hour time).
+                ds3231_time.sec = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 8 & 0xf);
+                ds3231_time.min = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 4 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val & 0xf);
+                ds3231_time.hour = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 1].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 1].val >> 8 & 0xf);
+                ds3231_time.mday = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 8 & 0xf);
+                ds3231_time.mon = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 4 & 1) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val & 0xf);
+                ds3231_time.year = 1900 
+                    + 100 * (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 7 & 1) 
+                    + 10 * (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET+ 3].val >> 12 & 0xf)
+                    + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET+ 3].val >> 8 & 0xf);
+
+                    ds3231_time_unix_timestamp = ts_to_tm(ds3231_time, nullptr);
+
+                // If no samples were skipped, the ULP would have read the time from 
+                // the DS3231 right before the deep sleep wake stub, so we need to 
+                // add the system uptime to it for an accurate current timestamp.
+                // Otherwise, the ULP would have kept reading the time until the 
+                // previous block cleared the buffer offset, so it will be accurate.
+                if (ulp_sample_buffer_offset_was_reset) {
+                    system_timeval.tv_sec = ds3231_time_unix_timestamp + esp_timer_get_time() / 1000000;
+                } else {
+                    system_timeval.tv_sec = ds3231_time_unix_timestamp;
+                }
+            } 
+            setenv("TZ", timezone_utc_offset_string, 1);
+            tzset();
+            settimeofday(&system_timeval, nullptr);
 
             // Process all the raw data using the conversion sequence specified
             // in the MS5803 datasheet. 
@@ -1313,7 +1405,6 @@ extern "C" void app_main() {
                 // Write the processed data to the buffer.
                 write_buffer[num_samples] = sensor.pressure();
             }
-
 
             ESP_LOGI(TAG, "Dumping to card");
             ESP_LOGI(TAG, "First Timestamp=%ld", first_sample_timestamp);
@@ -1357,47 +1448,25 @@ extern "C" void app_main() {
 
             // We can skip this chunk of code if we're about to shut down
             if (!button_pressed) {
-                // Right before the ULP wakes up the main processor, it reads and 
-                // stores the time from the DS3231. We decode that here (assuming 
-                // some things e.g. 24 hour time).
-                uint8_t seconds = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 8 & 0xf);
-                uint8_t minutes = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val >> 4 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET].val & 0xf);
-                uint8_t hours = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 1].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 1].val >> 8 & 0xf);
-                uint8_t day_of_month = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 12 & 0xf) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 8 & 0xf);
-                uint8_t month = (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 4 & 1) * 10 + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val & 0xf);
-                uint16_t year = 1900 
-                    + 100 * (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET + 2].val >> 7 & 1) 
-                    + 10 * (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET+ 3].val >> 12 & 0xf)
-                    + (ulp_i2c_read_time[HULP_I2C_CMD_DATA_OFFSET+ 3].val >> 8 & 0xf);
-                
-                tm timestamp{};
-                timestamp.tm_year = year - 1900; // years since 1900
-                timestamp.tm_mon = month - 1; // months since January
-                timestamp.tm_mday = day_of_month;
-                timestamp.tm_hour = hours;
-                timestamp.tm_min = minutes;
-                timestamp.tm_sec = seconds;
-                time_t unix_timestamp = mktime(&timestamp);
-
                 // Save a timestamp for the first sample of the next batch.
-                first_sample_timestamp = unix_timestamp;
+                first_sample_timestamp = ds3231_time_unix_timestamp;
 
                 // If a new day has started, start a new data file for the next 
                 // cycle.
-                if (old_day != day_of_month) {
+                if (old_day != ds3231_time.mday) {
                     // Generate a new file name with the current date and time.
-                    snprintf(output_file_name, FILE_NAME_SIZE, FILE_NAME_FORMAT, device_name, year % 10000, month % 100, day_of_month % 100, hours % 100, minutes % 100);
+                    snprintf(output_file_name, FILE_NAME_SIZE, FILE_NAME_FORMAT, device_name, ds3231_time.year % 10000, ds3231_time.mon % 100, ds3231_time.mday % 100, ds3231_time.hour % 100, ds3231_time.min % 100);
                     // Start a new file.
-                    f = fopen(output_file_name, "w");
+                    f = fopen(output_file_name, "wb");
                     if (f == nullptr) {
                         ERROR(sdFileError, true);
                     }
-                    if (write_data_header(f) != DATA_HEADER_SIZE) {
+                    if (write_data_header(f) == 0) {
                         ERROR(sdFileError, true);
                     } 
                     fclose(f);
                     f = nullptr;
-                    old_day = day_of_month;
+                    old_day = ds3231_time.mday;
                 } 
             }
 
@@ -1489,7 +1558,7 @@ static esp_err_t http_get_index_handler(httpd_req_t* req) {
 static esp_err_t http_get_api_clock_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
 
-    struct ts time_now;
+    ts time_now;
     DS3231_get(&time_now);
 
     char json[32] = {0};
@@ -1525,7 +1594,7 @@ static esp_err_t http_get_api_sensor_handler(httpd_req_t* req) {
 static esp_err_t http_get_api_all_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
 
-    struct ts time_now;
+    ts time_now;
     DS3231_get(&time_now);
     sensor.readSensor();
 
@@ -1602,9 +1671,9 @@ static esp_err_t http_post_api_clock_handler(httpd_req_t* req) {
     }
 
     time_t converted_epoch_time = static_cast<time_t>(epoch_time);
-    struct tm *time = localtime(&converted_epoch_time);
+    tm *time = localtime(&converted_epoch_time);
 
-    struct ts rtc_time = {
+    ts rtc_time = {
         .sec = static_cast<uint8_t>(time->tm_sec),
         .min = static_cast<uint8_t>(time->tm_min),
         .hour = static_cast<uint8_t>(time->tm_hour),
