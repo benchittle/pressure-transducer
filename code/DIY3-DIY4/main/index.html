@@ -172,10 +172,10 @@
         <div class="grid-item data">
             <h2>Data</h2>
             <p>
-                MicroSD card capacity (bytes): <span class="dynamic-data" id="data-storage-capacity">unknown</span>
+                MicroSD card capacity (KB): <span class="dynamic-data" id="data-storage-capacity">unknown</span>
             </p>
             <p>
-                MicroSD card capacity used (bytes): <span class="dynamic-data" id="data-storage-used">unknown</span>
+                MicroSD card capacity used (KB): <span class="dynamic-data" id="data-storage-used">unknown</span>
             </p>
         </div>
         <div class="grid-item clock">
@@ -201,7 +201,18 @@
             <p>
                 Temperature (&deg;C): <span class="dynamic-data" id="sensor-temperature">unknown</span>
             </p>
-            <button id="sensor-update-button" onclick="updateSensorSection();" disabled>Read sensor</button>
+            <button id="sensor-update-button" onclick="updateSensorReading();" disabled>Read sensor</button>
+            <p>
+                Current sample frequency (Hz): <span class="dynamic-data" id="sensor-sample-frequency">unknown</span>
+                <br>
+                <select id="sensor-sample-frequency-select">
+                    <option value="1">1 Hz</option>
+                    <option value="2">2 Hz</option>
+                    <option value="4">4 Hz</option>
+                    <!-- <option value="8">8 (Experimental)</option> -->
+                </select>
+                <button id="sensor-sample-frequency-set-button" onclick="setSampleFrequency();" disabled>Set new sample frequency</button>
+            </p>
         </div>
     </div>
 
@@ -263,6 +274,41 @@
                             "Content-Type": "text/plain", 
                         },
                         body: timeEpochSec.toString(),
+                    })
+                } catch(error) {
+                    throw new NetworkError(`Failed to set ${RESOURCE} (${error})`);
+                }
+                if (!response.ok) {
+                    throw new ApiError(`Failed to set ${RESOURCE} (${response.status} ${response.statusText})`);
+                }
+            }
+
+            async getSampleFrequency() {
+                const RESOURCE = "/api/sample_frequency";
+                let response;
+                try {
+                    response = await fetch(RESOURCE,  {
+                        cache: "no-store"
+                    });
+                } catch(error) {
+                    throw new NetworkError(`Failed to retrieve ${RESOURCE} (${error})`);
+                }
+                if (!response.ok) {
+                    throw new ApiError(`Failed to retrieve ${RESOURCE} (${response.status} ${response.statusText})`); 
+                }
+                return response.json();
+            }
+
+            async setSampleFrequency(sampleFrequencyHz) {
+                const RESOURCE = "/api/sample_frequency";
+                let response;
+                try {
+                    response = await fetch(RESOURCE, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "text/plain", 
+                        },
+                        body: sampleFrequencyHz.toString(),
                     })
                 } catch(error) {
                     throw new NetworkError(`Failed to set ${RESOURCE} (${error})`);
@@ -375,11 +421,11 @@
             document.getElementById("clock-set-button").disabled = false;
 
             document.getElementById("sensor-update-button").disabled = false;
+            document.getElementById("sensor-sample-frequency-set-button").disabled = false;
         }
 
         function disableDashboard() {
             const now = new Date();
-            //now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
 
             document.getElementById("device-status-connected").hidden = true;
             document.getElementById("device-status-disconnected").hidden = false;
@@ -391,22 +437,23 @@
             document.getElementById("clock-set-button").disabled = true;
 
             document.getElementById("sensor-update-button").disabled = true;
+            document.getElementById("sensor-sample-frequency-set-button").disabled = true;
         }
         
         function populateDashboard(data) {
             populateDeviceSection(data["device_name"]);
             populateDataSection(data["storage_capacity"], data["storage_used"]);
             populateClockSection(data["clock_time"]);
-            populateSensorSection(data["sensor_pressure"], data["sensor_temperature"]);
+            populateSensorSection(data["sensor_pressure"], data["sensor_temperature"], data["sample_frequency"]);
         }
 
         function populateDeviceSection(deviceName) {
             document.getElementById("device-name").textContent = deviceName;
         }
 
-        function populateDataSection(storageCapacity, storageUsed) {
-            document.getElementById("data-storage-capacity").textContent = storageCapacity;
-            document.getElementById("data-storage-used").textContent = storageUsed + " (" + (storageUsed / storageCapacity * 100).toString().slice(0, 4) + "%)";
+        function populateDataSection(storageCapacityBytes, storageUsedBytes) {
+            document.getElementById("data-storage-capacity").textContent = storageCapacityBytes / 1000;
+            document.getElementById("data-storage-used").textContent = storageUsedBytes / 1000 + " (" + (storageUsedBytes / storageCapacityBytes * 100).toString().slice(0, 4) + "%)";
         }
 
         function populateClockSection(onboardTimeEpochSec) {
@@ -427,9 +474,18 @@
             onboardClockDisplay.textContent = onboardTimeString;
         }
 
-        function populateSensorSection(pressure, temperature) {
+        function populateSensorReadings(pressure, temperature) {
             document.getElementById("sensor-pressure").textContent = pressure;
             document.getElementById("sensor-temperature").textContent = temperature;
+        }
+
+        function populateSensorFrequency(sampleFrequency) {
+            document.getElementById("sensor-sample-frequency").textContent = sampleFrequency;
+        }
+
+        function populateSensorSection(pressure, temperature, sampleFrequency) {
+            populateSensorReadings(pressure, temperature);
+            populateSensorFrequency(sampleFrequency);            
         }
 
         // Set the value of the input section to the browser's current time
@@ -450,13 +506,13 @@
             }
             
             transducerService.setClock(timeEpochSec)
-                .then(() => {
-                    console.log(`Set onboard clock time to ${timeEpochSec} (${timeStringIso})`);
-                })
-                .catch(error => {
-                    console.error(error);
-                    console.log("Failed to set onboard clock");
-                });
+            .then(() => {
+                console.log(`Set onboard clock time to ${timeEpochSec} (${timeStringIso})`);
+            })
+            .catch(error => {
+                console.error(error);
+                console.log("Failed to set onboard clock");
+            });
         }
 
         function enableClockInput() {
@@ -470,10 +526,28 @@
             }
         }
 
-        function updateSensorSection() {
+        function updateSensorReading() {
             transducerService.getSensor()
-                .then(data => populateSensorSection(data["sensor_pressure"], data["sensor_temperature"]))
+                .then(data => populateSensorReadings(data["sensor_pressure"], data["sensor_temperature"]))
                 .catch(error => console.error(error));
+        }
+
+        function setSampleFrequency() {
+            const sampleFrequency = document.getElementById("sensor-sample-frequency-select").value;
+            
+            transducerService.setSampleFrequency(sampleFrequency)
+            .then(() => {
+                console.log(`Set sampling frequency to ${sampleFrequency}`);
+                transducerService.getSampleFrequency().then(json => {
+                    populateSensorFrequency(json["sample_frequency"]);
+                }).catch(error => {
+                    console.error(error);
+                    console.log("Failed to get new sampling frequency");
+                });
+            }).catch(error => {
+                console.error(error);
+                console.log("Failed to set sampling frequency");
+            });
         }
     </script>
 </body>

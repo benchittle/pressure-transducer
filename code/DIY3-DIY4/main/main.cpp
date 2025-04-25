@@ -84,6 +84,10 @@
 #define CONFIG_FILE SD_MOUNT_POINT "/config.json"
 #define CONFIG_FILE_BUFFER_SIZE 512
 
+#define CONFIG_JSON_DEVICE_NAME "device_name"
+#define CONFIG_JSON_SAMPLE_FREQUENCY "sample_frequency_hz"
+#define CONFIG_JSON_TIMEZONE_OFFSET "timezone_utc_offset"
+
 #define TIMEZONE_OFFSET_STRING_LENGTH 9
 #define DEFAULT_TIMEZONE_OFFSET_STRING "UTC+00:00"
 
@@ -156,6 +160,7 @@ static_assert(BUFFER_SIZE % MAX_SAMPLES_PER_SECOND == 0, "BUFFER_SIZE must be a 
 
 static const char* TAG = "transducer";
 static const char* TAG_DASHBOARD = "dashboard";
+static const char* TAG_CONFIG = "transducer-config";
 
 // TODO: Move all WiFi / dashboard functionality to its own file
 void start_dashboard();
@@ -940,8 +945,53 @@ void sd_deinit() {
 }
 
 
+bool validate_device_name(char const* device_name, char const* logging_tag) {
+    if (strlen(device_name) >= DEVICE_NAME_SIZE) {
+        ESP_LOGI(logging_tag, "Device name is too long. Max %d characters", DEVICE_NAME_SIZE - 1);
+        return false;
+    }
+    for (char const* c = device_name; *c != '\0'; c++) {
+        if (!isalnum(*c) && *c != '-' && *c != '_') {
+            ESP_LOGI(logging_tag, "Device name contains invalid character: '%c'. Only alphanumeric characters, dashes, and underscores are allowed", *c);
+            return false;
+        }
+    }
+    return true;
+}
+
+
+bool validate_sample_frequency(uint16_t sample_frequency, char const* logging_tag) {
+    if (!IS_VALID_SAMPLING_FREQUENCY(sample_frequency)) {
+        ESP_LOGI(logging_tag, "Invalid sampling frequency: %d. Valid values are: " VALID_SAMPLEING_FREQUENCIES, sample_frequency);
+        return false;
+    }
+    return true;
+}
+
+
+bool validate_timezone_utc_offset(char const* timezone_utc_offset, char const* logging_tag) {
+    if (strlen(timezone_utc_offset) != TIMEZONE_OFFSET_STRING_LENGTH) {
+        ESP_LOGI(logging_tag, "Timezone offset string invalid length. Expected length %d", TIMEZONE_OFFSET_STRING_LENGTH);
+        return false;
+    }
+    if (!(
+        strncmp(timezone_utc_offset, "UTC", 3) == 0
+        && (timezone_utc_offset[3] == '-' || timezone_utc_offset[3] == '+')
+        && isdigit(timezone_utc_offset[4])
+        && isdigit(timezone_utc_offset[5])
+        && timezone_utc_offset[6] == ':'
+        && isdigit(timezone_utc_offset[7])
+        && isdigit(timezone_utc_offset[8])
+    )) {
+        ESP_LOGI(logging_tag, "Timezone offset string '%s' is invalid. Must be of form 'UTC-hh:mm' or 'UTC+hh:mm'", timezone_utc_offset);
+        return false;
+    }
+    return true;
+}
+
+
 bool parse_config(FILE* config_file) {
-    static const char* TAG_CONFIG = "transducer-config";
+    bool success = false;
     char json_buffer[CONFIG_FILE_BUFFER_SIZE] = {0};
     size_t bytes_read = fread(json_buffer, 1, sizeof(json_buffer) - 1, config_file);
     if (bytes_read == 0) {
@@ -953,81 +1003,98 @@ bool parse_config(FILE* config_file) {
     }
 
     cJSON* json_root = cJSON_Parse(json_buffer);
+    const cJSON* json_device_name = cJSON_GetObjectItem(json_root, CONFIG_JSON_DEVICE_NAME);
+    const cJSON* json_sample_frequency = cJSON_GetObjectItem(json_root, CONFIG_JSON_SAMPLE_FREQUENCY);
+    const cJSON* json_timezone_utc_offset = cJSON_GetObjectItem(json_root, CONFIG_JSON_TIMEZONE_OFFSET);
     if (json_root == nullptr) {
         const char *error_ptr = cJSON_GetErrorPtr();
         if (error_ptr != nullptr) {
             ESP_LOGW(TAG_CONFIG, "Error parsing JSON (before: %s)", error_ptr);
         }
-        return false;
+        goto end;
     }
 
-    // Read device name
-    const cJSON* json_device_name = cJSON_GetObjectItem(json_root, "device_name");
+    // Validate device name
     if (!cJSON_IsString(json_device_name) || json_device_name->valuestring == nullptr) {
-        ESP_LOGW(TAG_CONFIG, "Failed to read JSON field 'device_name'. Field value must be a string");
-        return false;
+        ESP_LOGW(TAG_CONFIG, "Failed to read JSON field '" CONFIG_JSON_DEVICE_NAME "'. Field value must be a string");
+        goto end;
     }
-    // Validate
-    if (strlen(json_device_name->valuestring) >= DEVICE_NAME_SIZE) {
-        ESP_LOGW(TAG_CONFIG, "Device name is too long. Max %d characters", DEVICE_NAME_SIZE - 1);
-        return false;
-    }
-    for (char* c = json_device_name->valuestring; *c != '\0'; c++) {
-        if (!isalnum(*c) && *c != '-' && *c != '_') {
-            ESP_LOGW(TAG_CONFIG, "Device name contains invalid character: %c. Only alphanumeric characters, dashes, and underscores are allowed", *c);
-            return false;
-        }
+    if (!validate_device_name(json_device_name->valuestring, TAG_CONFIG)) {
+        goto end;
     }
 
-    // Read sample frequency
-    const cJSON* json_sample_frequency = cJSON_GetObjectItem(json_root, "sample_frequency_hz");
+    // Validate sample frequency
     if (!cJSON_IsNumber(json_sample_frequency)) {
-        ESP_LOGW(TAG_CONFIG, "Failed to read JSON field 'sample_frequency_hz'. Field value must be numeric");
-        return false;
+        ESP_LOGW(TAG_CONFIG, "Failed to read JSON field '" CONFIG_JSON_SAMPLE_FREQUENCY "'. Field value must be numeric");
+        goto end;
     }
-    // Validate
-    if (!IS_VALID_SAMPLING_FREQUENCY(json_sample_frequency->valueint)) {
-        ESP_LOGW(TAG_CONFIG, "Invalid sampling frequency: %d. Valid values are: " VALID_SAMPLEING_FREQUENCIES, json_sample_frequency->valueint);
-        return false;
+    if (!validate_sample_frequency(json_sample_frequency->valueint, TAG_CONFIG)) {
+        goto end;
     }
 
-    // Read timezone UTC offset
-    const cJSON* json_timezone_utc_offset = cJSON_GetObjectItem(json_root, "timezone_utc_offset");
+    // Validate timezone UTC offset
     if (!cJSON_IsString(json_timezone_utc_offset) || json_timezone_utc_offset->valuestring == nullptr) {
-        ESP_LOGW(TAG_CONFIG, "Failed to read JSON field 'timezone_utc_offset'. Field value must be a string");
-        return false;
+        ESP_LOGW(TAG_CONFIG, "Failed to read JSON field '" CONFIG_JSON_TIMEZONE_OFFSET "'. Field value must be a string");
+        goto end;
     }
-    // Validate
-    if (strlen(json_timezone_utc_offset->valuestring) != TIMEZONE_OFFSET_STRING_LENGTH) {
-        ESP_LOGW(TAG_CONFIG, "Timezone offset string invalid length. Expected length %d", TIMEZONE_OFFSET_STRING_LENGTH);
-        return false;
-    }
-    if (!(
-        strncmp(json_timezone_utc_offset->valuestring, "UTC", 3) == 0
-        && (json_timezone_utc_offset->valuestring[3] == '-' || json_timezone_utc_offset->valuestring[3] == '+')
-        && isdigit(json_timezone_utc_offset->valuestring[4])
-        && isdigit(json_timezone_utc_offset->valuestring[5])
-        && json_timezone_utc_offset->valuestring[6] == ':'
-        && isdigit(json_timezone_utc_offset->valuestring[7])
-        && isdigit(json_timezone_utc_offset->valuestring[8])
-    )) {
-        ESP_LOGW(TAG_CONFIG, "Timezone offset string '%s' is invalid. Must be of form 'UTC-hh:mm' or 'UTC+hh:mm'", json_timezone_utc_offset->valuestring);
-        return false;
+    if (!validate_timezone_utc_offset(json_timezone_utc_offset->valuestring, TAG_CONFIG)) {
+        goto end;
     }
 
     // Set global config variables
     strcpy(device_name, json_device_name->valuestring);
     samples_per_second = json_sample_frequency->valueint;
     strcpy(timezone_utc_offset_string, json_timezone_utc_offset->valuestring);
-
-    ESP_LOGI(TAG_CONFIG, "Device name is %s", device_name);
-    ESP_LOGI(TAG_CONFIG, "Sample frequency is %d Hz", samples_per_second);
-    ESP_LOGI(TAG_CONFIG, "Timezone offset string is %s", timezone_utc_offset_string);
     
     // Cleanup
+    success = true;
+end:
     cJSON_Delete(json_root);
+    return success;
+}
 
-    return true;
+
+bool write_config() {
+    char* json_output;
+    FILE* f;
+
+    bool success = false;
+    cJSON *config = cJSON_CreateObject();
+    if (config == nullptr) {
+        goto end1;
+    }
+    if (cJSON_AddStringToObject(config, CONFIG_JSON_DEVICE_NAME, device_name) == nullptr) {
+        goto end1;
+    }
+    if (cJSON_AddNumberToObject(config, CONFIG_JSON_SAMPLE_FREQUENCY, samples_per_second) == nullptr) {
+        goto end1;
+    }
+    if (cJSON_AddStringToObject(config, CONFIG_JSON_TIMEZONE_OFFSET, timezone_utc_offset_string) == nullptr) {
+        goto end1;
+    }
+
+    json_output = cJSON_Print(config);
+    if (json_output == nullptr) {
+        goto end1;
+    }
+
+    f = fopen(CONFIG_FILE, "w");
+    if (f == nullptr) {
+        goto end2;
+    }    
+
+    if (fwrite(json_output, sizeof(json_output[0]), strlen(json_output), f) == 0) {
+        goto end3;
+    }
+
+    success = true;
+end3:
+    fclose(f);
+end2:
+    free(json_output);
+end1:
+    cJSON_Delete(config);
+    return success;
 }
 
 
@@ -1178,6 +1245,10 @@ extern "C" void app_main() {
                 ESP_LOGW(TAG, "Using default config values");
                 flash(sdConfigWarning);
             }
+
+            ESP_LOGI(TAG, "Device name is %s", device_name);
+            ESP_LOGI(TAG, "Sample frequency is %d Hz", samples_per_second);
+            ESP_LOGI(TAG, "Timezone offset string is %s", timezone_utc_offset_string);
 
             ESP_LOGI(TAG, "Setting timezone and system time");
             DS3231_get(&time_now);
@@ -1529,7 +1600,6 @@ void wifi_init_softap()
         )
     );
 
-
     wifi_config_t wifi_ap_config = {.ap{}};
     wifi_ap_config.ap.ssid_len = 0;
     wifi_ap_config.ap.channel = 1;
@@ -1546,6 +1616,7 @@ void wifi_init_softap()
     ESP_LOGI(TAG, "wifi_init_softap finished");
 }
 
+
 static esp_err_t http_get_index_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
     httpd_resp_set_status(req, HTTPD_200);
@@ -1554,6 +1625,7 @@ static esp_err_t http_get_index_handler(httpd_req_t* req) {
 
     return ESP_OK;
 }
+
 
 static esp_err_t http_get_api_clock_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
@@ -1570,6 +1642,7 @@ static esp_err_t http_get_api_clock_handler(httpd_req_t* req) {
 
     return ESP_OK;
 }
+
 
 static esp_err_t http_get_api_sensor_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
@@ -1591,6 +1664,21 @@ static esp_err_t http_get_api_sensor_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+
+static esp_err_t http_get_api_sample_frequency_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
+
+    char json[64] = {0};
+    int json_len = snprintf(json, sizeof(json), "{\"sample_frequency\": %d}", samples_per_second);
+
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, json_len);
+
+    return ESP_OK;
+}
+
+
 static esp_err_t http_get_api_all_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
 
@@ -1604,6 +1692,7 @@ static esp_err_t http_get_api_all_handler(httpd_req_t* req) {
         sizeof(json), 
         "{" 
             "\"device_name\": \"%s\","
+            "\"sample_frequency\": %d,"
             "\"storage_capacity\": %llu,"
             "\"storage_used\": %lu,"
             "\"clock_time\": %ld,"
@@ -1611,6 +1700,7 @@ static esp_err_t http_get_api_all_handler(httpd_req_t* req) {
             "\"sensor_temperature\": %.1f"
         "}",
         device_name,
+        samples_per_second,
         (uint64_t) card->csd.capacity * card->csd.sector_size, 
         sd_get_used(),
         time_now.unixtime,
@@ -1625,19 +1715,48 @@ static esp_err_t http_get_api_all_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
-// TODO
-static esp_err_t http_get_api_sample_frequency_handler(httpd_req_t* req) {
-    ESP_LOGI(TAG_DASHBOARD, "Received: GET %s", req->uri);
 
-    char json[64] = {0};
-    int json_len = snprintf(json, sizeof(json), "{\"sample_frequency\": %d}", samples_per_second);
+static esp_err_t http_post_api_sample_frequency_handler(httpd_req_t* req) {
+    ESP_LOGI(TAG_DASHBOARD, "Received: POST %s", req->uri);
+
+    char content[2]; // Should be a single digit number
+    if (req->content_len > sizeof(content)) {
+        ESP_LOGI(TAG_DASHBOARD, "Content size is too big: expected max of %d. Replying with 413", sizeof(content));
+        httpd_resp_send_custom_err(req, "413", "Content Too Large");
+        return ESP_FAIL;
+    }
+
+    int ret = httpd_req_recv(req, content, req->content_len);
+    if (ret <= 0) {
+        // Check if timeout occurred
+        ESP_LOGE(TAG_DASHBOARD, "Failed to receive content");
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
+    }
+    unsigned long new_sample_frequency = strtoul(content, nullptr, 10);
+
+    if (!validate_sample_frequency(new_sample_frequency, TAG_DASHBOARD)) {
+        httpd_resp_send_custom_err(req, "422", "Unprocessable Content");
+        return ESP_FAIL;
+    }
+
+    uint16_t old_sample_frequency = samples_per_second;
+    samples_per_second = new_sample_frequency;
+    if (!write_config()) {
+        httpd_resp_send_500(req);
+        samples_per_second = old_sample_frequency;
+        return ESP_FAIL;
+    }
 
     httpd_resp_set_status(req, HTTPD_200);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, json_len);
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_send(req, "", 0);
 
     return ESP_OK;
 }
+
 
 static esp_err_t http_post_api_clock_handler(httpd_req_t* req) {
     ESP_LOGI(TAG_DASHBOARD, "Received: POST %s", req->uri);
@@ -1696,6 +1815,7 @@ static esp_err_t http_post_api_clock_handler(httpd_req_t* req) {
     return ESP_OK;
 }
 
+
 static const httpd_uri_t http_get_index = {
     .uri = "/",
     .method = HTTP_GET,
@@ -1717,6 +1837,13 @@ static const httpd_uri_t http_get_api_sensor = {
     .user_ctx = nullptr,
 };
 
+static const httpd_uri_t http_get_api_sample_frequency = {
+    .uri = "/api/sample_frequency",
+    .method = HTTP_GET,
+    .handler = http_get_api_sample_frequency_handler,
+    .user_ctx = nullptr,
+};
+
 static const httpd_uri_t http_get_api_all = {
     .uri = "/api/all",
     .method = HTTP_GET,
@@ -1730,6 +1857,14 @@ static const httpd_uri_t http_post_api_clock = {
     .handler = http_post_api_clock_handler,
     .user_ctx = nullptr,
 };
+
+static const httpd_uri_t http_post_api_sample_frequency = {
+    .uri = "/api/sample_frequency",
+    .method = HTTP_POST,
+    .handler = http_post_api_sample_frequency_handler,
+    .user_ctx = nullptr,
+};
+
 
 httpd_handle_t start_server() {
     httpd_handle_t server = nullptr;
@@ -1747,6 +1882,8 @@ httpd_handle_t start_server() {
         httpd_register_uri_handler(server, &http_get_api_sensor);
         httpd_register_uri_handler(server, &http_get_api_all);
         httpd_register_uri_handler(server, &http_post_api_clock);
+        httpd_register_uri_handler(server, &http_get_api_sample_frequency);
+        httpd_register_uri_handler(server, &http_post_api_sample_frequency);
 
         return server;
     }

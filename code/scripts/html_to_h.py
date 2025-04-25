@@ -35,5 +35,6 @@ def main(html_path: str, h_path: str):
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         print(f"Error: Incorrect number of arguments\nUsage: python {os.path.basename(__file__)} html_path h_path")
+        exit(1)
 
     main(sys.argv[1], sys.argv[2])
