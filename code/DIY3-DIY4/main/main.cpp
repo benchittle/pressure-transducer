@@ -108,14 +108,15 @@
 // Approximate duration of a single execution of the ULP program (not including 
 // the wait loop). The added number is determined empirically and can be 
 // adjusted if the program gets longer or shorter.
-#define ULP_PROGRAM_DURATION_US (ULP_MS5803_CONVERSION_DELAY_US + 8000)
+#define ULP_PROGRAM_DURATION_US (2 * ULP_MS5803_CONVERSION_DELAY_US + 800)
 
 // The number of ULP processor cycles per iteration of the wait loop.
-#define ULP_CYCLES_PER_WAIT_LOOP 22
+#define ULP_CYCLES_PER_WAIT_LOOP 32
 // The intended amount of time for the ULP to spend in the wait loop
 // over the course of a second, used for initially calculating how many 
 // iterations of the wait loop the ULP should perform each sample.
-#define ULP_WAIT_LOOP_TOTAL_TIME_MS 100
+#define ULP_WAIT_LOOP_TOTAL_TIME_MS 50
+#define ULP_SLEEP_DURATION_US(samples_per_second) (((1000 - ULP_WAIT_LOOP_TOTAL_TIME_MS) / samples_per_second) * 1000 - ULP_PROGRAM_DURATION_US)
 
 // Maximum sample frequency of the device.
 // MUST BE A POWER OF 2
@@ -147,6 +148,8 @@ static_assert(BUFFER_SIZE % MAX_SAMPLES_PER_SECOND == 0, "BUFFER_SIZE must be a 
 
 #define WIFI_SERVER_PORT 80
 #define DNS_SERVER_PORT 53
+
+#define DIY3
 
 // Domain at which the WiFi dashboard can be reached after connecting to the 
 // ESP's WiFi. 
@@ -215,7 +218,15 @@ RTC_DATA_ATTR ulp_var_t ulp_sample_buffer[ULP_BUFFER_SIZE];
 RTC_FAST_ATTR ulp_var_t ulp_sample_buffer_copy[ULP_BUFFER_SIZE];
 // Used to index the ULP's buffer in the ULP program.
 RTC_DATA_ATTR ulp_var_t ulp_sample_buffer_offset{};
+// ulp_sample_buffer_offset will be copied into here in the deep sleep wake stub
+// when we wake up. It should always be ULP_BUFFER_SIZE unless we woke up early
+// from a shutdown button press.
 RTC_FAST_ATTR uint16_t ulp_end_sample_buffer_offset;
+// The duration the ULP will sleep between samples. This value is adjusted each
+// time the main core wakes up to keep the sample frequency as accurate as 
+// possible.
+RTC_DATA_ATTR uint32_t ulp_sleep_duration_us;
+
 // Flag used in the ULP program to track whether the MS5803's raw D2 value has
 // been read.
 RTC_DATA_ATTR ulp_var_t ulp_d2_flag{};
@@ -380,9 +391,9 @@ time_t ts_to_tm(ts ds3231_time, tm* system_time) {
  */
 void flash(uint8_t flash_count) {
     for (uint8_t i = 0; i < flash_count; i++) {
-        digitalWrite(ERROR_LED_PIN, HIGH);
+        rtc_gpio_set_level(ERROR_LED_PIN, 1);
         delay(LED_FLASH_DURATION);
-        digitalWrite(ERROR_LED_PIN, LOW);
+        rtc_gpio_set_level(ERROR_LED_PIN, 0);
         delay(LED_FLASH_DURATION);
     }
 }
@@ -440,7 +451,7 @@ void error(diy4_error_t error_num, size_t line, bool attempt_logging) {
         ts time_now{};
         time_now.sec = 61;
         Wire.begin();
-        digitalWrite(RTC_POWER_PIN, HIGH);
+        rtc_gpio_set_level(RTC_POWER_PIN, 1);
         DS3231_get(&time_now);
 
         // If we successfully got the time from the DS3231, overwrite time_string
@@ -451,7 +462,7 @@ void error(diy4_error_t error_num, size_t line, bool attempt_logging) {
 
         // Then we'll try to open and write to a log file on the SD card
         // TODO: Perhaps save to ESP32 flash if we can't save to SD card?
-        digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD power
+        rtc_gpio_set_level(SD_SWITCH_PIN, 0); // Turn on SD power
         // if (SD.begin(SD_CS_PIN)) {
         //     File logFile = SD.open(log_file_name, FILE_APPEND, true);
         //     if (logFile) {
@@ -497,9 +508,9 @@ void error(diy4_error_t error_num, size_t line, bool attempt_logging) {
     // Try to restart the device.
     if (restart_count < MAX_RESTART_COUNT) {
         for (uint8_t i = 0; i < 5; ++i) {
-            digitalWrite(ERROR_LED_PIN, HIGH);
+            rtc_gpio_set_level(ERROR_LED_PIN, 1);
             delay(LED_FLASH_DURATION / 4);
-            digitalWrite(ERROR_LED_PIN, LOW);
+            rtc_gpio_set_level(ERROR_LED_PIN, 0);
             delay(LED_FLASH_DURATION / 4);
         }
         #if ECHO_TO_SERIAL
@@ -541,7 +552,7 @@ void monitor_ulp() {
             old = ulp_sample_buffer_offset.val;
             int64_t time_us = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
             
-            ESP_LOGI("MONITOR", "delta_ms=%lld check_delta=%lld count=%d ulp_processor_wait_cycles=%d wait_time_ms=%lu", (time_us - last) / 1000, (time_us - last_check) / 1000, count, ulp_wait_loop_iterations.val, ulp_wait_loop_iterations.val * 22 / (rtc_fast_freq_hz / 1000));
+            ESP_LOGI("MONITOR", "delta_ms=%lld count=%d ulp_processor_wait_cycles=%d wait_time_ms=%lu, calibration=%lx", (time_us - last) / 1000, count, ulp_wait_loop_iterations.val, ulp_wait_loop_iterations.val * 22 / (rtc_fast_freq_hz / 1000), esp_clk_slowclk_cal_get());
             last = time_us;
             count++;
         }
@@ -549,10 +560,8 @@ void monitor_ulp() {
         
         vTaskDelay(1);
 
-        if (digitalRead(BUTTON_PIN) == 0) {
+        if (rtc_gpio_get_level(BUTTON_PIN) == 0) {
             ulp_sample_buffer_offset.val = 0;
-            ulp_samples_this_second.val = 0;
-            ESP_ERROR_CHECK(hulp_ulp_run(0));
         }
     }
 }
@@ -621,14 +630,16 @@ void ulp_init()
         M_BL(L_LAST_SAMPLE_THIS_SECOND, 1),
 
         // Otherwise, wait then go take a sample
-        M_LABEL(L_SAMPLE_WAIT_LOOP),
-        I_SUBI(R1, R1, 1),          // 2 + 4 = 6 cycles
-        M_BXZ(L_SAMPLE_NO_ALARM),   // 2 + 2 = 4 cycles
-        M_BX(L_WASTE_CYCLE_1),      // 2 + 2 = 4 cycles
-        M_LABEL(L_WASTE_CYCLE_1),   // (Waste cycles to match the other wait loops)
-        M_BX(L_WASTE_CYCLE_2),      // 2 + 2 = 4 cycles
-        M_LABEL(L_WASTE_CYCLE_2),
-        M_BX(L_SAMPLE_WAIT_LOOP),   // 2 + 2 = 4 cycles, total = 22
+        M_LABEL(L_SAMPLE_WAIT_LOOP),    // cycles to execute + cycles to fetch next instruction
+        I_SUBI(R1, R1, 1),              // 2 + 2 = 4 cycles
+        M_BXZ(L_SAMPLE_NO_ALARM),       // 2 + 2 = 4 cycles
+        // (Waste cycles to match the other wait loop)
+        I_ADDI(R1, R1, 0),              // 2 + 2 = 4 cycles                     
+        I_ADDI(R1, R1, 0),              // 2 + 2 = 4 cycles
+        I_ADDI(R1, R1, 0),              // 2 + 2 = 4 cycles
+        I_ADDI(R1, R1, 0),              // 2 + 2 = 4 cycles
+        I_ADDI(R1, R1, 0),              // 2 + 2 = 4 cycles
+        M_BX(L_SAMPLE_WAIT_LOOP),       // 2 + 2 = 4 cycles, total = 32
 
         M_LABEL(L_LAST_SAMPLE_THIS_SECOND),
         I_MOVI(R0, 0),
@@ -638,15 +649,19 @@ void ulp_init()
         // times we loop. We'll use this to adjust the sleep delay if we're 
         // running fast or slow.
         M_LABEL(L_WAIT_FOR_ALARM),
-        I_SUBI(R1, R1, 1),                  // 2 + 4 = 6 cycles
+        I_SUBI(R1, R1, 1),                  // 2 + 2 = 4 cycles
         M_BXZ(L_WAIT_FOR_ALARM_FAST),       // 2 + 2 = 4 cycles
         I_GPIO_READ(RTC_ALARM_PIN),         // 4 + 4 = 8 cycles
-        M_BGE(L_WAIT_FOR_ALARM, 1),         // 2 + 2 = 4 cycles, total = 22
+        // (Waste some cycles to increase the wait loop time)
+        I_ADDI(R1, R1, 0),                  // 2 + 2 = 4 cycles
+        I_ADDI(R1, R1, 0),                  // 2 + 2 = 4 cycles
+        I_ADDI(R1, R1, 0),                  // 2 + 2 = 4 cycles
+        M_BGE(L_WAIT_FOR_ALARM, 1),         // 2 + 2 = 4 cycles, total = 32
         
         // If we get here, either we were perfectly on time or slow
         // Compensate: divide the remaining time (cycles) by the frequency 
         // and reduce the calibration delay by that amount.
-        I_RSHR(R1, R1, R2), // R2 is samples_per_second
+        I_RSHI(R1, R1,  static_cast<uint8_t>(hulp_log2(samples_per_second))),
         I_SUBR(R3, R3, R1), // R3 is ulp_wait_loop_iterations
         I_MOVI(R1, 0),
         I_PUT(R3, R1, ulp_wait_loop_iterations),
@@ -663,7 +678,7 @@ void ulp_init()
 
         // Compensate: divide the cycles waited by the frequency and increase 
         // the calibration delay by that amount
-        I_RSHR(R1, R1, R2), // R2 is samples_per_second
+        I_RSHI(R1, R1, static_cast<uint8_t>(hulp_log2(samples_per_second))),
         I_ADDR(R3, R3, R1), // R3 is ulp_wait_loop_iterations
         I_MOVI(R1, 0),
         I_PUT(R3, R1, ulp_wait_loop_iterations),
@@ -764,28 +779,27 @@ void ulp_init()
 
         // Halt ULP program and go back to sleep.
         M_LABEL(L_DONE),
-        I_HALT(),  // 73 + 3 instructions
+        I_HALT(),  // ^^ 82 instructions ^^
 
         // Include HULP "subroutines" for bitbanged I2C.
         M_INCLUDE_I2CBB_CMD(L_READ, L_WRITE, ULP_SCL_PIN, ULP_SDA_PIN), // 90 instructions
-        // Total: 166 instructions (might be outdated if I forget to change it :) )
+        // Total: 172 instructions (might be outdated if I forget to change it :) )
     };
     
     // Configure pins for use by the ULP.
     ESP_ERROR_CHECK(hulp_configure_pin(ULP_SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
     ESP_ERROR_CHECK(hulp_configure_pin(ULP_SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));   
-    ESP_ERROR_CHECK(hulp_configure_pin(RTC_ALARM_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));
 
     hulp_peripherals_on();
 
-    uint32_t ulp_processor_wait_cycles = (hulp_get_fast_clk_freq() / 1000) * (ULP_WAIT_LOOP_TOTAL_TIME_MS / samples_per_second);
+    const uint32_t ulp_processor_wait_cycles = (hulp_get_fast_clk_freq() / 1000) * (ULP_WAIT_LOOP_TOTAL_TIME_MS / samples_per_second);
     ulp_wait_loop_iterations.val = ulp_processor_wait_cycles / ULP_CYCLES_PER_WAIT_LOOP;
     ESP_LOGI(TAG, "Number of ULP wait loop iterations per sample: %d", ulp_wait_loop_iterations.val);
    
     // Determine how long the ULP should sleep between samples to achieve the 
     // desired sample frequency. This isn't perfect, but the ULP will actively 
     // compensate as it starts sampling.
-    uint32_t ulp_sleep_duration_us = ((1000 / samples_per_second) - (ULP_WAIT_LOOP_TOTAL_TIME_MS / samples_per_second)) * 1000 - ULP_PROGRAM_DURATION_US;
+    ulp_sleep_duration_us = ULP_SLEEP_DURATION_US(samples_per_second);
     ESP_ERROR_CHECK(hulp_ulp_load(program, sizeof(program), ulp_sleep_duration_us, 0));
 
     gettimeofday(&tv_now, nullptr);
@@ -818,7 +832,7 @@ void shutdown() {
 
     ESP_LOGI(TAG, "Deinitializing RTC");
     // Enable power to RTC
-    digitalWrite(RTC_POWER_PIN, HIGH);
+    rtc_gpio_set_level(RTC_POWER_PIN, 1);
     // Wait to make sure RTC is on and ULP is done using I2C.
     delay(1000); 
 
@@ -831,7 +845,7 @@ void shutdown() {
     DS3231_clear_a1f();
     DS3231_clear_a2f();
     Wire.end();
-    digitalWrite(RTC_POWER_PIN, LOW);
+    rtc_gpio_set_level(RTC_POWER_PIN, 0);
 
     // Turn on the LED to signal power can be removed. This function is used to
     // keep the LED on during deep sleep.
@@ -1091,32 +1105,34 @@ void IRAM_ATTR button_interrupt() {
 extern "C" void app_main() {
     bool button_pressed_at_startup = false;
 
-    // pinMode(SD_CS_PIN, OUTPUT);
-    digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
-    pinMode(SD_SWITCH_PIN, OUTPUT);
-    pinMode(RTC_POWER_PIN, OUTPUT);
-    pinMode(RTC_ALARM_PIN, INPUT_PULLUP);
-    pinMode(ERROR_LED_PIN, OUTPUT);
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
-    // After setup, the button can be used to safely "shut down" the ESP32 and 
-    // disable active peripherals.
-    attachInterrupt(BUTTON_PIN, button_interrupt, FALLING);
-    // Using ext1 instead of ext0 because of a bug that prevents ext0 and ULP
-    // interrupts from being used together.
-    esp_sleep_enable_ext1_wakeup(((uint64_t) 0b1) << BUTTON_PIN, ESP_EXT1_WAKEUP_ALL_LOW);
-
+    #ifdef DIY4
+        pinMode(SD_SWITCH_PIN, OUTPUT);
+    #endif
+    
+    // pinMode(ERROR_LED_PIN, OUTPUT);
+    // pinMode(BUTTON_PIN, INPUT_PULLUP);
+    
     // Jump to the appropriate code depending on whether the ESP32 was just 
     // powered or just woke up from deep sleep. 
     switch (esp_reset_reason()) {   
         case ESP_RST_POWERON: {
+            ESP_ERROR_CHECK(hulp_configure_pin(ERROR_LED_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 0));  
+            ESP_ERROR_CHECK(hulp_configure_pin(BUTTON_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));  
+            ESP_ERROR_CHECK(hulp_configure_pin(RTC_POWER_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1));  
+            ESP_ERROR_CHECK(hulp_configure_pin(RTC_ALARM_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));  
+            
             restart_count = 0;
-            if (digitalRead(BUTTON_PIN) == LOW) {
+            if (rtc_gpio_get_level(BUTTON_PIN) == 0) {
                 button_pressed_at_startup = true;
                 ESP_LOGI(TAG, "Button press detected at startup. Device will enter server mode after initializing");
             }
         }
         [[fallthrough]];
         case ESP_RST_SW: {
+            // After setup, the button can be used to safely "shut down" the ESP32 and 
+            // disable active peripherals.
+            attachInterrupt(BUTTON_PIN, button_interrupt, FALLING);
+        
             ESP_LOGI(TAG, "Starting setup");
             ESP_LOGI(TAG, "Initializing RTC");
 
@@ -1126,7 +1142,7 @@ extern "C" void app_main() {
             // to the DS3231 causes it to drain more current, but will preserve
             // the backup battery which is used most of the time. We provide 
             // main power here in case the device has not yet been initialized.
-            digitalWrite(RTC_POWER_PIN, HIGH);
+            rtc_gpio_set_level(RTC_POWER_PIN, 1);
 
             // According to the datasheet, the oscillator takes <1 sec to begin (on 
             // first time startup), so we wait 1 second in case this is the first time
@@ -1274,9 +1290,9 @@ extern "C" void app_main() {
 
             // Flash LED's to signal successful startup.
             ESP_LOGI(TAG, "Flashing LED");
-            digitalWrite(ERROR_LED_PIN, HIGH);
+            rtc_gpio_set_level(ERROR_LED_PIN, 1);
             delay(3000);
-            digitalWrite(ERROR_LED_PIN, LOW);
+            rtc_gpio_set_level(ERROR_LED_PIN, 0);
 
             if (button_pressed_at_startup) {
                 ESP_LOGI(TAG, "Entering server mode");
@@ -1286,7 +1302,9 @@ extern "C" void app_main() {
             // TODO: only if DIY4 
             ESP_LOGI(TAG, "Disabling SD card power and getting updated time");
 
-            digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
+            #ifdef DIY4
+                rtc_gpio_set_level(SD_SWITCH_PIN, 1); // Turn off SD card power
+            #endif
 
             DS3231_get(&time_now);
             // Save a timestamp for the first sample. We'll add 1 second
@@ -1303,7 +1321,7 @@ extern "C" void app_main() {
             DS3231_clear_a1f();
 
             ESP_LOGI(TAG, "Disabling DS3231 pin power");
-            digitalWrite(RTC_POWER_PIN, LOW);
+            rtc_gpio_set_level(RTC_POWER_PIN, 0);
            
             // Reset the restart count if a succesful startup occurs.
             restart_count = 0;
@@ -1311,15 +1329,11 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Starting ULP");
             ulp_init();
 
-            ESP_LOGI(TAG, "Setup complete!");
-
-            // monitor_ulp();
-            
             // Allow the ULP to trigger the ESP32 to wake up.
-            ESP_LOGI(TAG, "Going to sleep");
             ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
-            
-            // Enter deep sleep.
+            ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup(((uint64_t) 0b1) << BUTTON_PIN, ESP_EXT1_WAKEUP_ALL_LOW));
+
+            ESP_LOGI(TAG, "Setup complete! Going to sleep...");
             esp_deep_sleep_start();
         }
 
@@ -1327,6 +1341,23 @@ extern "C" void app_main() {
         // TODO: Cleanup Serial logging / debug messages
         case ESP_RST_DEEPSLEEP: {
             ESP_LOGI(TAG, "Awake!");
+            
+            const int32_t estimated_ulp_wait_loop_iterations = ((hulp_get_fast_clk_freq() / 1000) * (ULP_WAIT_LOOP_TOTAL_TIME_MS / samples_per_second)) / ULP_CYCLES_PER_WAIT_LOOP;
+            const int32_t delta_ulp_wait_loop_iterations = ulp_wait_loop_iterations.val - estimated_ulp_wait_loop_iterations;
+            int32_t delta_ulp_sleep_duration_us = (delta_ulp_wait_loop_iterations * ULP_CYCLES_PER_WAIT_LOOP * 1000000ll) / (int64_t) (hulp_get_fast_clk_freq());
+            ESP_LOGI(TAG, "Current ULP sleep duration: %lu us", ulp_sleep_duration_us);
+            ESP_LOGI(TAG, "ULP wait loop iterations: %d iterations", ulp_wait_loop_iterations.val);
+            ESP_LOGI(TAG, "New ULP wait loop iterations estimate is: %lu iterations", estimated_ulp_wait_loop_iterations);
+            ESP_LOGI(TAG, "Change in ULP sleep duration: %ld us", delta_ulp_sleep_duration_us);
+            
+            const int32_t max_delta_ulp_sleep_duration_us = (ULP_WAIT_LOOP_TOTAL_TIME_MS * 1000 / samples_per_second) / 2;
+            if (abs(delta_ulp_sleep_duration_us) > max_delta_ulp_sleep_duration_us) {
+                delta_ulp_sleep_duration_us = delta_ulp_sleep_duration_us < 0 ? -max_delta_ulp_sleep_duration_us : max_delta_ulp_sleep_duration_us;
+                ESP_LOGW(TAG, "Change in ULP sleep duration is too large to do all at once. Reducing change to: %ld us", delta_ulp_sleep_duration_us);
+            }
+            
+            ulp_sleep_duration_us += delta_ulp_sleep_duration_us;
+            ESP_ERROR_CHECK(ulp_set_wakeup_period(0, ulp_sleep_duration_us));
 
             // Shutdown button was pressed
             if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1) {
@@ -1392,11 +1423,12 @@ extern "C" void app_main() {
             #else 
                 ESP_LOGI(TAG, "First pressure sample: %.2f mbar", write_buffer[0]);
             #endif
-            
-            // Reinitialize connection with SD card.
-            ESP_LOGI(TAG, "Turning on SD power");
-            digitalWrite(SD_SWITCH_PIN, LOW); // Turn on SD card power
-            delay(100); // Some sensors were erroring here, so maybe delay is needed?
+            #ifdef DIY4
+                // Reinitialize connection with SD card.
+                ESP_LOGI(TAG, "Turning on SD power");
+                rtc_gpio_set_level(SD_SWITCH_PIN, 0); // Turn on SD card power
+                delay(100); // Some sensors were erroring here, so maybe delay is needed?
+            #endif
             if (!sd_init()) {
                 ERROR(sdInitError, false);
             }
@@ -1461,22 +1493,24 @@ extern "C" void app_main() {
             }
 
             sd_deinit();
-            ESP_LOGI(TAG, "Turning off SD power in %d ms", SD_OFF_DELAY_MS);
-            delay(SD_OFF_DELAY_MS);
-            digitalWrite(SD_SWITCH_PIN, HIGH); // Turn off SD card power
-
-            ESP_LOGI(TAG, "Going to sleep...");
+            #ifdef DIY4
+                ESP_LOGI(TAG, "Turning off SD power in %d ms", SD_OFF_DELAY_MS);
+                delay(SD_OFF_DELAY_MS);
+                rtc_gpio_set_level(SD_SWITCH_PIN, 1); // Turn off SD card power
+            #endif
 
             // If the shutdown button was pushed while the device was in deep 
             // sleep, stop sampling and shut down.
             if (button_pressed) {
-               shutdown();
+                shutdown();
             }
-
+            
             // Allow the ULP to trigger the ESP32 to wake up.
+            hulp_peripherals_on();
             ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup());
+            ESP_ERROR_CHECK(esp_sleep_enable_ext1_wakeup(((uint64_t) 0b1) << BUTTON_PIN, ESP_EXT1_WAKEUP_ALL_LOW));
 
-            // Enter deep sleep.
+            ESP_LOGI(TAG, "Going to sleep...");
             esp_deep_sleep_start();
         }
 
@@ -1833,9 +1867,9 @@ void start_dashboard() {
         vTaskDelay(pdMS_TO_TICKS(SERVER_MODE_LED_FLASH_PERIOD_MS));
 
         if (led_on) {
-            digitalWrite(ERROR_LED_PIN, LOW);
+            rtc_gpio_set_level(ERROR_LED_PIN, 0);
         } else {
-            digitalWrite(ERROR_LED_PIN, HIGH);
+            rtc_gpio_set_level(ERROR_LED_PIN, 1);
         }
         led_on = !led_on;
     }
