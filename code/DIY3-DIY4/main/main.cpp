@@ -167,7 +167,6 @@ void start_dashboard();
 // Globals for SD card
 sdmmc_card_t* card;
 sdspi_device_config_t sdspi_device_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-char sd_mount_point[] = SD_MOUNT_POINT;
 
 // Buffer to use for storing data to be written to the SD card. We allocate it
 // as a global variable to avoid stack overflow, which would otherwise happen
@@ -901,12 +900,11 @@ bool sd_init() {
 
     // This initializes the slot without card detect (CD) and write protect (WP) signals.
     // Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = SD_CS_PIN;
-    slot_config.host_id = (spi_host_device_t) host.slot;
+    sdspi_device_config.gpio_cs = SD_CS_PIN;
+    sdspi_device_config.host_id = (spi_host_device_t) host.slot;
 
     ESP_LOGI(TAG, "Mounting filesystem");
-    ret = esp_vfs_fat_sdspi_mount(sd_mount_point, &host, &slot_config, &mount_config, &card);
+    ret = esp_vfs_fat_sdspi_mount(SD_MOUNT_POINT, &host, &sdspi_device_config, &mount_config, &card);
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
@@ -948,8 +946,8 @@ DWORD sd_get_used() {
 
 
 void sd_deinit() {
-    esp_vfs_fat_sdcard_unmount(sd_mount_point, card);
-    spi_bus_free(sdspi_device_config.host_id);
+    ESP_ERROR_CHECK(esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, card));
+    ESP_ERROR_CHECK(spi_bus_free(sdspi_device_config.host_id));
     sd_initialized = false;
 }
 
@@ -1283,10 +1281,8 @@ extern "C" void app_main() {
             fclose(log_file);
             log_file = nullptr;
 
-            // Deinitialize the SD card if we're going into dashboard server mode
-            if (!button_pressed_at_startup) {
-                sd_deinit();
-            }
+            ESP_LOGI(TAG, "Deinitializing SD card");
+            sd_deinit();
 
             // Flash LED's to signal successful startup.
             ESP_LOGI(TAG, "Flashing LED");
@@ -1492,6 +1488,7 @@ extern "C" void app_main() {
                 } 
             }
 
+            ESP_LOGI(TAG, "Deinitializing SD card");
             sd_deinit();
             #ifdef DIY4
                 ESP_LOGI(TAG, "Turning off SD power in %d ms", SD_OFF_DELAY_MS);
