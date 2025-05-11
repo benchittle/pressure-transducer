@@ -72,7 +72,6 @@
 #define FILE_NAME_SUFFIX_LEN 19
 // The format for data file names is: /sd/DEVICENAME_YYYYMMDD-hhmm.data
 #define FILE_NAME_FORMAT FILE_NAME_PREFIX_FORMAT FILE_NAME_SUFFIX_FORMAT
-
 // Maximum length of file name string (including null terminator)
 #define FILE_NAME_SIZE (FILE_NAME_PREFIX_MAX_LEN + FILE_NAME_SUFFIX_LEN + 1)
 
@@ -84,15 +83,15 @@
 #define CONFIG_JSON_SAMPLE_FREQUENCY "sample_frequency_hz"
 
 // A log file will be created on the SD card for capturing diagnostics and 
-// errors. If the SD card has a config.txt file with a device name, the log
-// will be at /devicename.log. Otherwise, the log file will be based on the
-// default device name /DIY-XX.log.
-#define LOG_FILE_NAME_PREFIX SD_MOUNT_POINT "/"
-#define LOG_FILE_NAME_SUFFIX ".log"
-#define DEFAULT_LOG_FILE_NAME LOG_FILE_NAME_PREFIX DEFAULT_DEVICE_NAME LOG_FILE_NAME_SUFFIX
-#define LOG_FILE_NAME_SIZE ((sizeof(DEFAULT_LOG_FILE_NAME) >= sizeof(LOG_FILE_NAME_PREFIX LOG_FILE_NAME_SUFFIX) + DEVICE_NAME_SIZE - 1) ? \
-    sizeof(DEFAULT_LOG_FILE_NAME): \
-    sizeof(LOG_FILE_NAME_PREFIX LOG_FILE_NAME_SUFFIX) + DEVICE_NAME_SIZE - 1)
+// errors. The format for log file names is /sd/DEVICENAME_YYYYMMDD-hhmm.log
+// The timestamp in the log file name is the time at which the logger is started
+// (should be the same as the first data file).
+#define LOG_FILE_NAME_PREFIX_FORMAT SD_MOUNT_POINT "/%s"
+#define LOG_FILE_NAME_PREFIX_MAX_LEN (SD_MOUNT_POINT_LEN + 1 + DEVICE_NAME_SIZE)
+#define LOG_FILE_NAME_SUFFIX_FORMAT "_%04d%02d%02d-%02d%02d.log"
+#define LOG_FILE_NAME_SUFFIX_LEN 18
+#define LOG_FILE_NAME_FORMAT LOG_FILE_NAME_PREFIX_FORMAT LOG_FILE_NAME_SUFFIX_FORMAT
+#define LOG_FILE_NAME_SIZE (LOG_FILE_NAME_PREFIX_MAX_LEN + LOG_FILE_NAME_SUFFIX_LEN + 1)
 
 // Data files use a header to describe their contents. Every data file starts 
 // with a 4 character string of the format 'Vxxx' where x is a digit. Header 
@@ -184,7 +183,7 @@ RTC_FAST_ATTR char device_name[DEVICE_NAME_SIZE] = {0};
 // Store the name for the current data file across deep sleep restarts.
 RTC_FAST_ATTR char output_file_name[FILE_NAME_SIZE] = {0};
 // Store the name for the log file.
-RTC_FAST_ATTR char log_file_name[LOG_FILE_NAME_SIZE] = DEFAULT_LOG_FILE_NAME;
+RTC_FAST_ATTR char log_file_name[LOG_FILE_NAME_SIZE] = {0};
 // Store the timezone offset string: UTC+hh:mm or UTC-hh:mm
 
 // Track the number of times a custom error has been encountered causing the
@@ -1164,7 +1163,6 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Card size: %llu KiB", sd_capacity_kb);
             uint32_t sd_used_kb = sd_get_used() / 1024;
             ESP_LOGI(TAG, "Card used: %lu KiB", sd_used_kb);
-            
 
             // Get config from SD card or use default.
             ESP_LOGI(TAG, "Looking for config file at " CONFIG_FILE);
@@ -1181,7 +1179,6 @@ extern "C" void app_main() {
 
             if (config_error) {
                 strcpy(device_name, DEFAULT_DEVICE_NAME);
-                strcpy(log_file_name, DEFAULT_LOG_FILE_NAME);
                 sample_frequency = MAX_SAMPLE_FREQUENCY;
                 ESP_LOGW(TAG, "Using default config values");
                 flash(TRANSDUCER_SD_CONFIG_WARNING);
@@ -1190,10 +1187,10 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Device name is %s", device_name);
             ESP_LOGI(TAG, "Sample frequency is %d Hz", sample_frequency);
 
-            snprintf(log_file_name, LOG_FILE_NAME_SIZE, LOG_FILE_NAME_PREFIX "%s" LOG_FILE_NAME_SUFFIX, device_name);
-            ESP_LOGI(TAG, "Log file name will be %s", log_file_name);
+            // Generate the name of the log file for this batch of data.
+            snprintf(log_file_name, LOG_FILE_NAME_SIZE, LOG_FILE_NAME_FORMAT, device_name, time_now.year % 10000, time_now.mon % 100, time_now.mday % 100, time_now.hour % 100, time_now.min % 100);
             
-            // Generate the first file.
+            // Start the first data file.
             ESP_LOGI(TAG, "Creating first data output file");
             snprintf(output_file_name, FILE_NAME_SIZE, FILE_NAME_FORMAT, device_name, time_now.year % 10000, time_now.mon % 100, time_now.mday % 100, time_now.hour % 100, time_now.min % 100);
             FILE* f = fopen(output_file_name, "w");
@@ -1216,7 +1213,7 @@ extern "C" void app_main() {
             sensor.readSensor();
             ESP_LOGI(TAG, "Pressure: %f mbar \tTemperature: %f deg C", sensor.pressure(), sensor.temperature());
 
-            ESP_LOGI(TAG, "Writing diagnostics to log file");
+            ESP_LOGI(TAG, "Writing diagnostics to log file %s", log_file_name);
             FILE* log_file = fopen(log_file_name, "a");
             if (!log_file) {
                 TRANSDUCER_ERROR(TRANSDUCER_SD_FILE_ERROR, false);
@@ -1245,7 +1242,7 @@ extern "C" void app_main() {
                 time_now.mon, time_now.mday, time_now.hour, time_now.min, 
                 time_now.sec, sensor.pressure(), sensor.temperature(), 
                 app_info->version, sd_capacity_kb, sd_used_kb, output_file_name,
-                restart_count, MAX_RESTART_COUNT, first_sample_timestamp,
+                restart_count, MAX_RESTART_COUNT, first_sample_timestamp
             );
             fclose(log_file);
             log_file = nullptr;
@@ -1456,6 +1453,29 @@ extern "C" void app_main() {
                     fclose(f);
                     f = nullptr;
                     day_of_month = ds3231_time.mday;
+                    
+                    ESP_LOGI(TAG, "Opening log file to log daily diagnostics");
+                    FILE* log_file = fopen(log_file_name, "a");
+                    if (!log_file) {
+                        TRANSDUCER_ERROR(TRANSDUCER_SD_FILE_ERROR, false);
+                    }
+                    fprintf(log_file,
+                        "DAILY DIAGNOSTICS\n"
+                        "\tRTC time: %d-%02d-%02d %02d:%02d:%02d\n"
+                        "\tCurrent output file: %s\n"
+                        "\tCurrent restart count: %d/%d\n"
+                        "\tTimestamp of first sample in next dump: %ld\n"
+                        "\tULP sleep duration: %lu us\n"
+                        "\tULP wait loop iterations: %u (target/estimate: %ld)\n",
+                        ds3231_time.year, ds3231_time.mon, ds3231_time.mday, 
+                        ds3231_time.hour, ds3231_time.min, ds3231_time.sec,
+                        output_file_name, restart_count, MAX_RESTART_COUNT, 
+                        first_sample_timestamp, ulp_sleep_duration_us, 
+                        ulp_wait_loop_iterations.val, 
+                        estimated_ulp_wait_loop_iterations
+                    );
+                    fclose(log_file);
+                    log_file = nullptr;
                 } 
             }
 
