@@ -16,6 +16,9 @@
 #include "SPI.h"
 #include "Wire.h"
 
+// ESP-Arduino libraries
+#include "DNSServer.h"
+
 // JSON parsing support
 #include "cJSON.h"
 
@@ -149,6 +152,7 @@ static_assert(BUFFER_SIZE % MAX_SAMPLE_FREQUENCY == 0, "BUFFER_SIZE must be a mu
 
 // Domain at which the WiFi dashboard can be reached after connecting to the 
 // ESP's WiFi. 
+#define DASHBOARD_IP "192.168.4.1"
 #define DASHBOARD_DOMAIN "dashboard.lan"
 
 #define SERVER_MODE_LED_FLASH_PERIOD_MS 100
@@ -289,6 +293,7 @@ enum transducer_error_t {
     TRANSDUCER_MS5803_ERROR,
     TRANSDUCER_RESET_ERROR,
     TRANSDUCER_ULP_ERROR,
+    TRANSDUCER_DASHBOARD_DNS_ERROR,
 };
 
 
@@ -1814,10 +1819,10 @@ httpd_handle_t start_server() {
     config.lru_purge_enable = true;
 
     // Start the httpd server
-    ESP_LOGI(TAG, "Starting server on port: '%d'", config.server_port);
+    ESP_LOGI(TAG_DASHBOARD, "Starting server on port: '%d'", config.server_port);
     if (httpd_start(&server, &config) == ESP_OK) {
         // Set URI handlers
-        ESP_LOGI(TAG, "Registering URI handlers");
+        ESP_LOGI(TAG_DASHBOARD, "Registering URI handlers");
         httpd_register_uri_handler(server, &http_get_index);
         httpd_register_uri_handler(server, &http_get_api_clock);
         httpd_register_uri_handler(server, &http_get_api_sensor);
@@ -1829,7 +1834,7 @@ httpd_handle_t start_server() {
         return server;
     }
 
-    ESP_LOGI(TAG, "Error starting server!");
+    ESP_LOGI(TAG_DASHBOARD, "Error starting server!");
     return nullptr;
 }
 
@@ -1844,21 +1849,31 @@ void start_dashboard() {
     ESP_ERROR_CHECK(ret);
 
     /* Initialize AP */
-    ESP_LOGI(TAG, "ESP_WIFI_MODE_AP");
+    ESP_LOGI(TAG_DASHBOARD, "ESP_WIFI_MODE_AP");
     wifi_init_softap();
     
     start_server();
 
-    bool led_on = false;
-    // TODO: DNS server
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(SERVER_MODE_LED_FLASH_PERIOD_MS));
+    DNSServer dnsServer{};
 
+    if (dnsServer.start(DNS_SERVER_PORT, DASHBOARD_DOMAIN, IPAddress(DASHBOARD_IP))) {
+        ESP_LOGI(TAG_DASHBOARD, "DNS Server started");
+    } else {
+        ESP_LOGE(TAG_DASHBOARD, "Error starting DNS server");
+        TRANSDUCER_ERROR(TRANSDUCER_DASHBOARD_DNS_ERROR, 1);
+    }
+
+    ESP_LOGI(TAG_DASHBOARD, "Dashboard setup complete");
+    bool led_on = false;
+    while (1) {
+        dnsServer.processNextRequest();
+        
         if (led_on) {
             rtc_gpio_set_level(ERROR_LED_PIN, 0);
         } else {
             rtc_gpio_set_level(ERROR_LED_PIN, 1);
         }
         led_on = !led_on;
+        vTaskDelay(pdMS_TO_TICKS(SERVER_MODE_LED_FLASH_PERIOD_MS));
     }
 }
