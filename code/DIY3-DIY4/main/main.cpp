@@ -139,6 +139,7 @@ static_assert(BUFFER_SIZE % MAX_SAMPLE_FREQUENCY == 0, "BUFFER_SIZE must be a mu
 // After dumping data to the SD card, we'll wait this long before shutting off 
 // power to the SD card.
 #define SD_OFF_DELAY_MS 2000
+#define SD_ON_DELAY_MS 100
 
 // If set to 1, whenever the device wakes up it will print all pressure readings
 // to serial. This can take substantial time (a second or two) which could be
@@ -444,8 +445,6 @@ void transducer_error(transducer_error_t error_num, size_t line, bool attempt_lo
 
         // Then we'll try to open and write to a log file on the SD card
         // TODO: Perhaps save to ESP32 flash if we can't save to SD card?
-        rtc_gpio_set_level(SD_SWITCH_PIN, 0); // Turn on SD power
-        vTaskDelay(pdMS_TO_TICKS(100));
         if (sd_initialized || sd_init()) {      
             FILE* log_file = fopen(log_file_name, "a");
             if (log_file != nullptr) {
@@ -483,10 +482,13 @@ void transducer_error(transducer_error_t error_num, size_t line, bool attempt_lo
                 ESP_LOGI(TAG, "Error opening log file");
             }
             sd_deinit();
+            #ifdef DIY4
+                vTaskDelay(pdMS_TO_TICKS(SD_OFF_DELAY_MS));
+                rtc_gpio_set_level(SD_SWITCH_PIN, 1); // Turn off SD power
+            #endif
         } else {
             ESP_LOGI(TAG, "Error initializing SD card");
         }
-        rtc_gpio_set_level(SD_SWITCH_PIN, 1); // Turn off SD power
     }
 
     // Try to restart the device.
@@ -823,6 +825,10 @@ void shutdown() {
     Wire.end();
     rtc_gpio_set_level(RTC_POWER_PIN, 0);
 
+    if (sd_initialized) {
+        sd_deinit();
+    }
+
     // Turn on the LED to signal power can be removed. This function is used to
     // keep the LED on during deep sleep.
     hulp_configure_pin(ERROR_LED_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, HIGH);
@@ -839,6 +845,12 @@ void shutdown() {
 
 bool sd_init() {
     esp_err_t ret;
+
+    ESP_LOGI(TAG, "Turning on SD power");
+    #ifdef DIY4
+        rtc_gpio_set_level(SD_SWITCH_PIN, 0); // enable power to SD card
+        vTaskDelay(pdMS_TO_TICKS(SD_ON_DELAY_MS));
+    #endif
 
     // Options for mounting the filesystem.
     // If format_if_mount_failed is set to true, SD card will be partitioned and
@@ -872,7 +884,7 @@ bool sd_init() {
     ret = spi_bus_initialize((spi_host_device_t) host.slot, &bus_cfg, SDSPI_DEFAULT_DMA);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize bus.");
-        return false;
+        goto init_failed;
     }
 
     // This initializes the slot without card detect (CD) and write protect (WP) signals.
@@ -890,14 +902,21 @@ bool sd_init() {
             ESP_LOGE(TAG, "Failed to initialize the card (%s). "
                      "Make sure SD card lines have pull-up resistors in place.", esp_err_to_name(ret));
         }
-        return false;
+        ESP_ERROR_CHECK(spi_bus_free(sdspi_device_config.host_id));
+        goto init_failed;
     }
     ESP_LOGI(TAG, "Filesystem mounted");
 
-    // Card has been initialized, print its properties
-    // sdmmc_card_print_info(stdout, card);
     sd_initialized = true;
     return true;
+
+init_failed:
+    sd_initialized = false;
+    #ifdef DIY4
+        vTaskDelay(pdMS_TO_TICKS(SD_OFF_DELAY_MS));
+        rtc_gpio_set_level(SD_SWITCH_PIN, 1); // disable power to SD card
+    #endif
+    return false;
 }
 
 
@@ -925,6 +944,7 @@ DWORD sd_get_used() {
 void sd_deinit() {
     ESP_ERROR_CHECK(esp_vfs_fat_sdcard_unmount(SD_MOUNT_POINT, card));
     ESP_ERROR_CHECK(spi_bus_free(sdspi_device_config.host_id));
+    card = nullptr;
     sd_initialized = false;
 }
 
@@ -1072,7 +1092,7 @@ size_t write_data_header(FILE* f) {
 }
 
 
-void IRAM_ATTR button_interrupt() {
+static void IRAM_ATTR button_interrupt(void*) {
     button_pressed = true;
 }
 
@@ -1090,10 +1110,16 @@ extern "C" void app_main() {
             ESP_ERROR_CHECK(hulp_configure_pin(RTC_ALARM_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));  
             #ifdef DIY4
                 // Enable SD power when configuring the pin
-                ESP_ERROR_CHECK(hulp_configure_pin(SD_SWITCH_PIN RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 0));  
+                ESP_ERROR_CHECK(hulp_configure_pin(SD_SWITCH_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 0));  
             #endif
             
             restart_count = 0;
+            // After setup, the button can be used to safely "shut down" the ESP32 and 
+            // disable active peripherals.
+            gpio_set_intr_type(BUTTON_PIN, GPIO_INTR_NEGEDGE);
+            gpio_install_isr_service(0);
+            gpio_isr_handler_add(BUTTON_PIN, button_interrupt, nullptr);
+
             if (rtc_gpio_get_level(BUTTON_PIN) == 0) {
                 button_pressed_at_startup = true;
                 ESP_LOGI(TAG, "Button press detected at startup. Device will enter server mode after initializing");
@@ -1101,10 +1127,6 @@ extern "C" void app_main() {
         }
         [[fallthrough]];
         case ESP_RST_SW: {
-            // After setup, the button can be used to safely "shut down" the ESP32 and 
-            // disable active peripherals.
-            attachInterrupt(BUTTON_PIN, button_interrupt, FALLING);
-        
             ESP_LOGI(TAG, "Starting setup");
             ESP_LOGI(TAG, "Initializing RTC");
 
@@ -1252,8 +1274,12 @@ extern "C" void app_main() {
             fclose(log_file);
             log_file = nullptr;
 
-            ESP_LOGI(TAG, "Deinitializing SD card");
-            sd_deinit();
+            // TODO: Refactor so we don't have "exceptions to the rule" like this
+            // scattered through setup.
+            if (!button_pressed_at_startup) {
+                ESP_LOGI(TAG, "Deinitializing SD card");
+                sd_deinit();
+            }
 
             // Flash LED's to signal successful startup.
             ESP_LOGI(TAG, "Flashing LED");
@@ -1265,14 +1291,13 @@ extern "C" void app_main() {
                 ESP_LOGI(TAG, "Entering server mode");
                 start_dashboard();          
             }
-
-            // TODO: only if DIY4 
-            ESP_LOGI(TAG, "Disabling SD card power and getting updated time");
-
+            
             #ifdef DIY4
+                ESP_LOGI(TAG, "Disabling SD card power");
                 rtc_gpio_set_level(SD_SWITCH_PIN, 1); // Turn off SD card power
             #endif
 
+            ESP_LOGI(TAG, "Getting updated time");
             DS3231_get(&time_now);
             // Save a timestamp for the first sample. We'll add 1 second
             // (alarmStatus) to the time since the first sample will actually be
@@ -1381,9 +1406,9 @@ extern "C" void app_main() {
             }
 
             ESP_LOGI(TAG, "Dumping to card");
-            ESP_LOGI(TAG, "First Timestamp=%ld", first_sample_timestamp);
+            ESP_LOGI(TAG, "Number of samples: %u", num_samples);
+            ESP_LOGI(TAG, "First timestamp: %lu", first_sample_timestamp);
             ESP_LOGI(TAG, "Temperature at first sample: %.2f degrees C", first_sample_temperature);
-            ESP_LOGI(TAG, "Number of samples: %d", num_samples);
             #if LOG_PRESSURE_ON_WAKE
                 ESP_LOGI(TAG, "Pressure (mbar)");
                 for (uint16_t i = 0; i < BUFFER_SIZE; i++) {
@@ -1392,12 +1417,7 @@ extern "C" void app_main() {
             #else 
                 ESP_LOGI(TAG, "First pressure sample: %.2f mbar", write_buffer[0]);
             #endif
-            #ifdef DIY4
-                // Reinitialize connection with SD card.
-                ESP_LOGI(TAG, "Turning on SD power");
-                rtc_gpio_set_level(SD_SWITCH_PIN, 0); // Turn on SD card power
-                vTaskDelay(pdMS_TO_TICKS(100)); // Some sensors were erroring here, so maybe delay is needed?
-            #endif
+            
             if (!sd_init()) {
                 TRANSDUCER_ERROR(TRANSDUCER_SD_INIT_ERROR, false);
             }
