@@ -139,7 +139,7 @@ static_assert(BUFFER_SIZE % MAX_SAMPLE_FREQUENCY == 0, "BUFFER_SIZE must be a mu
 // After dumping data to the SD card, we'll wait this long before shutting off 
 // power to the SD card.
 #define SD_OFF_DELAY_MS 2000
-#define SD_ON_DELAY_MS 100
+#define SD_ON_DELAY_MS 10000
 
 // If set to 1, whenever the device wakes up it will print all pressure readings
 // to serial. This can take substantial time (a second or two) which could be
@@ -591,6 +591,7 @@ void ulp_init()
     //   code documentation of that project to understand the "recipe" to
     //   use bitbanged I2C on the ULP.
     const ulp_insn_t program[] = {
+        // I_GPIO_OUTPUT_EN(GPIO_NUM_4),
         I_MOVI(R1, 0),
         I_GET(R0, R1, ulp_samples_this_second),
         I_ADDI(R0, R0, 1),
@@ -758,6 +759,7 @@ void ulp_init()
 
         // Halt ULP program and go back to sleep.
         M_LABEL(L_DONE),
+        // I_GPIO_OUTPUT_DIS(GPIO_NUM_4),
         I_HALT(),  // ^^ 82 instructions ^^
 
         // Include HULP "subroutines" for bitbanged I2C.
@@ -768,6 +770,7 @@ void ulp_init()
     // Configure pins for use by the ULP.
     ESP_ERROR_CHECK(hulp_configure_pin(ULP_SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
     ESP_ERROR_CHECK(hulp_configure_pin(ULP_SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));   
+    // ESP_ERROR_CHECK(hulp_configure_pin(GPIO_NUM_4, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1));   
 
     hulp_peripherals_on();
 
@@ -848,6 +851,10 @@ bool sd_init() {
 
     ESP_LOGI(TAG, "Turning on SD power");
     #ifdef DIY4
+        ESP_LOGI(TAG, "OFF");
+        rtc_gpio_set_level(SD_SWITCH_PIN, 1);
+        vTaskDelay(pdMS_TO_TICKS(SD_ON_DELAY_MS));
+        ESP_LOGI(TAG, "ON");
         rtc_gpio_set_level(SD_SWITCH_PIN, 0); // enable power to SD card
         vTaskDelay(pdMS_TO_TICKS(SD_ON_DELAY_MS));
     #endif
@@ -1161,7 +1168,7 @@ extern "C" void app_main() {
             // set since powered on (See #1)
             // Check to see if the date is earlier than the year in which the 
             // program was compiled.
-            if (time_now.year < ('0' - __DATE__[8]) * 1000 + ('0' - __DATE__[9]) * 100 + ('0' - __DATE__[10]) * 10 + ('0' - __DATE__[11])) {
+            if (time_now.year < (__DATE__[7] - '0') * 1000 + (__DATE__[8] - '0') * 100 + (__DATE__[9] - '0') * 10 + (__DATE__[10] - '0')) {
                 ESP_LOGW(TAG, "RTC time is out of date. Setting year to 2000");
                 time_now.year = 2000;
                 DS3231_set(time_now);
