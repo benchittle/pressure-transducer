@@ -21,12 +21,11 @@ def read_binary_to_csv(input_file: str, output_csv: str):
                 # Data format: 
                 # 16 byte device name (null terminated)
                 # 1 byte sampling frequency
-                # 9 byte timezone offset string
                 # 2 byte chunk size
                 header_format = "<16sBH"
                 header_unpacked = struct.unpack(header_format, header)
 
-                device_name = header_unpacked[0].decode()
+                device_name = header_unpacked[0].decode().replace("\x00", "")
                 sample_frequency = header_unpacked[1]
                 samples_per_chunk = header_unpacked[2]
 
