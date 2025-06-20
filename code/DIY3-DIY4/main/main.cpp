@@ -1,3 +1,8 @@
+#define DIY5
+#if defined(DIY4) && defined(DIY5)
+    #error "Only one of DIY4 and DIY5 should be defined"
+#endif
+
 // ESP IDF libraries
 #include "esp_app_desc.h"
 #include "esp_event.h"
@@ -41,7 +46,12 @@
 // Some functions require gpio_num_t types so we use those pin number 
 // definitions here.
 #define SD_CS_PIN GPIO_NUM_13 // D7 
-#define SD_SWITCH_PIN GPIO_NUM_15 // A4
+#if defined(DIY4)
+    #define SD_SWITCH_PIN GPIO_NUM_15 // A4
+#elif defined(DIY5)
+    #define SD_SWITCH_OFF_PIN GPIO_NUM_15 // A4
+    #define SD_SWITCH_ON_PIN GPIO_NUM_16 // D11 (Not an RTC GPIO pin; chosen for pull down on reset)
+#endif
 #define SD_MOSI_PIN GPIO_NUM_23     
 #define SD_MISO_PIN GPIO_NUM_19
 #define SD_SCK_PIN GPIO_NUM_18
@@ -101,7 +111,7 @@
 // and body formats are documented on the GitHub repository.
 #define DATA_HEADER_VERSION_STRING "V000"
 
-#define ULP_MS5803_CONVERSION_DELAY_US 10000
+#define ULP_MS5803_CONVERSION_DELAY_US 11000
 
 // Approximate duration of a single execution of the ULP program (not including 
 // the wait loop). The added number is determined empirically and can be 
@@ -139,7 +149,7 @@ static_assert(BUFFER_SIZE % MAX_SAMPLE_FREQUENCY == 0, "BUFFER_SIZE must be a mu
 // After dumping data to the SD card, we'll wait this long before shutting off 
 // power to the SD card.
 #define SD_OFF_DELAY_MS 2000
-#define SD_ON_DELAY_MS 10000
+#define SD_ON_DELAY_MS 500
 
 // If set to 1, whenever the device wakes up it will print all pressure readings
 // to serial. This can take substantial time (a second or two) which could be
@@ -148,8 +158,6 @@ static_assert(BUFFER_SIZE % MAX_SAMPLE_FREQUENCY == 0, "BUFFER_SIZE must be a mu
 
 #define WIFI_SERVER_PORT 80
 #define DNS_SERVER_PORT 53
-
-#define DIY3
 
 // Domain at which the WiFi dashboard can be reached after connecting to the 
 // ESP's WiFi. 
@@ -370,6 +378,38 @@ void RTC_IRAM_ATTR esp_wake_deep_sleep(void) {
 }
 
 
+// We use an RC circuit to soft start the SD card to avoid causing a brownout.
+// SD_SWITCH_OFF_PIN and SD_SWITCH_ON_PIN are connected to the gate of a high 
+// side MOSFET controlling power to the SD card.
+// SD_SWITCH_OFF_PIN drives the gate high, disabling power.
+// SD_SWITCH_ON_PIN drives the gate low (through a resistor), enabling power
+// slowly (a capacitor is also connected between gate and GND).
+void sd_on() {
+    #if defined(DIY4)
+        rtc_gpio_set_level(SD_SWITCH_PIN, 0);
+    #elif defined(DIY5)
+        // Set OFF GPIO to high impedence.
+        rtc_gpio_set_direction(SD_SWITCH_OFF_PIN, RTC_GPIO_MODE_DISABLED);
+        // Drive ON GPIO low.
+        gpio_set_level(SD_SWITCH_ON_PIN, 0);
+        gpio_set_direction(SD_SWITCH_ON_PIN, GPIO_MODE_OUTPUT);
+    #endif
+}
+
+
+void sd_off() {
+    #if defined(DIY4)
+        rtc_gpio_set_level(SD_SWITCH_PIN, 1);
+    #elif defined(DIY5)
+        // Set ON GPIO to high impedence.
+        gpio_set_direction(SD_SWITCH_ON_PIN, GPIO_MODE_DISABLE);
+        // Drive OFF GPIO high.
+        rtc_gpio_set_level(SD_SWITCH_OFF_PIN, 1);
+        rtc_gpio_set_direction(SD_SWITCH_OFF_PIN, RTC_GPIO_MODE_OUTPUT_ONLY);
+    #endif
+}
+
+
 time_t ts_to_tm(ts ds3231_time, tm* system_time) {
     tm t;
     if (system_time == nullptr) {
@@ -482,9 +522,9 @@ void transducer_error(transducer_error_t error_num, size_t line, bool attempt_lo
                 ESP_LOGI(TAG, "Error opening log file");
             }
             sd_deinit();
-            #ifdef DIY4
+            #if defined(DIY4) || defined(DIY5)
                 vTaskDelay(pdMS_TO_TICKS(SD_OFF_DELAY_MS));
-                rtc_gpio_set_level(SD_SWITCH_PIN, 1); // Turn off SD power
+                sd_off();
             #endif
         } else {
             ESP_LOGI(TAG, "Error initializing SD card");
@@ -849,13 +889,9 @@ void shutdown() {
 bool sd_init() {
     esp_err_t ret;
 
-    ESP_LOGI(TAG, "Turning on SD power");
-    #ifdef DIY4
-        ESP_LOGI(TAG, "OFF");
-        rtc_gpio_set_level(SD_SWITCH_PIN, 1);
-        vTaskDelay(pdMS_TO_TICKS(SD_ON_DELAY_MS));
-        ESP_LOGI(TAG, "ON");
-        rtc_gpio_set_level(SD_SWITCH_PIN, 0); // enable power to SD card
+    #if defined(DIY4) || defined(DIY5)
+        ESP_LOGI(TAG, "Turning on SD power");
+        sd_on();
         vTaskDelay(pdMS_TO_TICKS(SD_ON_DELAY_MS));
     #endif
 
@@ -919,9 +955,9 @@ bool sd_init() {
 
 init_failed:
     sd_initialized = false;
-    #ifdef DIY4
+    #if defined(DIY4) || defined(DIY5)
         vTaskDelay(pdMS_TO_TICKS(SD_OFF_DELAY_MS));
-        rtc_gpio_set_level(SD_SWITCH_PIN, 1); // disable power to SD card
+        sd_off();
     #endif
     return false;
 }
@@ -1115,9 +1151,13 @@ extern "C" void app_main() {
             ESP_ERROR_CHECK(hulp_configure_pin(BUTTON_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));  
             ESP_ERROR_CHECK(hulp_configure_pin(RTC_POWER_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1));  
             ESP_ERROR_CHECK(hulp_configure_pin(RTC_ALARM_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_PULLUP_ONLY, 0));  
-            #ifdef DIY4
-                // Enable SD power when configuring the pin
-                ESP_ERROR_CHECK(hulp_configure_pin(SD_SWITCH_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 0));  
+            #if defined(DIY4)
+                // Disable SD power when configuring the pin
+                ESP_ERROR_CHECK(hulp_configure_pin(SD_SWITCH_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1));  
+            #elif defined(DIY5)
+                // Disable SD power when configuring the pins
+                ESP_ERROR_CHECK(hulp_configure_pin(SD_SWITCH_OFF_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1));  
+                ESP_ERROR_CHECK(gpio_set_direction(SD_SWITCH_ON_PIN, GPIO_MODE_DISABLE));
             #endif
             
             restart_count = 0;
@@ -1248,7 +1288,7 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Pressure: %f mbar \tTemperature: %f deg C", sensor.pressure(), sensor.temperature());
 
             ESP_LOGI(TAG, "Writing diagnostics to log file %s", log_file_name);
-            FILE* log_file = fopen(log_file_name, "a");
+            FILE* log_file = fopen(log_file_name, "w");
             if (!log_file) {
                 TRANSDUCER_ERROR(TRANSDUCER_SD_FILE_ERROR, false);
             }
@@ -1265,7 +1305,7 @@ extern "C" void app_main() {
                 "\tRTC time: %d-%02d-%02d %02d:%02d:%02d\n"
                 "\tSample pressure: %f mbar\n"
                 "\tSample temp: %f deg C\n"
-                "\tCode uploaded on: " __DATE__ " @ " __TIME__ "\n"
+                "\tCode compiled on: " __DATE__ " @ " __TIME__ "\n"
                 "\tCode version: %s\n" 
                 "\tSD capacity: %llu KiB\n"
                 "\tSD used: %lu KiB\n"
@@ -1299,9 +1339,9 @@ extern "C" void app_main() {
                 start_dashboard();          
             }
             
-            #ifdef DIY4
+            #if defined(DIY4) || defined(DIY5)
                 ESP_LOGI(TAG, "Disabling SD card power");
-                rtc_gpio_set_level(SD_SWITCH_PIN, 1); // Turn off SD card power
+                sd_off();
             #endif
 
             ESP_LOGI(TAG, "Getting updated time");
@@ -1513,10 +1553,10 @@ extern "C" void app_main() {
 
             ESP_LOGI(TAG, "Deinitializing SD card");
             sd_deinit();
-            #ifdef DIY4
+            #if defined(DIY4) || defined(DIY5)
                 ESP_LOGI(TAG, "Turning off SD power in %d ms", SD_OFF_DELAY_MS);
                 vTaskDelay(pdMS_TO_TICKS(SD_OFF_DELAY_MS));
-                rtc_gpio_set_level(SD_SWITCH_PIN, 1); // Turn off SD card power
+                sd_off();
             #endif
 
             // If the shutdown button was pushed while the device was in deep 
