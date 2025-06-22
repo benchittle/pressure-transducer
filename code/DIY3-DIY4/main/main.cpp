@@ -1,9 +1,13 @@
-#define DIY5
-#if defined(DIY4) && defined(DIY5)
-    #error "Only one of DIY4 and DIY5 should be defined"
-#endif
+#define DIY3
+// #define ULP_START_STOP_TOGGLE_GPIO
+#if !defined(DIY3) && !defined(DIY4) && !defined(DIY5)
+    #error "At least one of DIY3, DIY4 and DIY5 targets should be defined"
+#elif !(defined(DIY3) ^ defined(DIY4) ^ defined(DIY5))
+    #error "Only one of DIY3, DIY4 and DIY5 targets should be defined"
+#endif 
 
 // ESP IDF libraries
+#include "cJSON.h"
 #include "esp_app_desc.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
@@ -23,9 +27,6 @@
 
 // ESP-Arduino libraries
 #include "DNSServer.h"
-
-// JSON parsing support
-#include "cJSON.h"
 
 // ULP macro programming utility functions.
 // https://github.com/boarchuz/HULP
@@ -51,6 +52,9 @@
 #elif defined(DIY5)
     #define SD_SWITCH_OFF_PIN GPIO_NUM_15 // A4
     #define SD_SWITCH_ON_PIN GPIO_NUM_16 // D11 (Not an RTC GPIO pin; chosen for pull down on reset)
+#endif
+#if defined(ULP_START_STOP_TOGGLE_GPIO)
+    #define ULP_START_STOP_GPIO_PIN GPIO_NUM_4 // D12
 #endif
 #define SD_MOSI_PIN GPIO_NUM_23     
 #define SD_MISO_PIN GPIO_NUM_19
@@ -148,8 +152,10 @@ static_assert(BUFFER_SIZE % MAX_SAMPLE_FREQUENCY == 0, "BUFFER_SIZE must be a mu
 
 // After dumping data to the SD card, we'll wait this long before shutting off 
 // power to the SD card.
-#define SD_OFF_DELAY_MS 2000
-#define SD_ON_DELAY_MS 500
+#if defined(DIY4) || defined(DIY5)
+    #define SD_OFF_DELAY_MS 1000
+    #define SD_ON_DELAY_MS 200
+#endif
 
 // If set to 1, whenever the device wakes up it will print all pressure readings
 // to serial. This can take substantial time (a second or two) which could be
@@ -631,7 +637,9 @@ void ulp_init()
     //   code documentation of that project to understand the "recipe" to
     //   use bitbanged I2C on the ULP.
     const ulp_insn_t program[] = {
-        // I_GPIO_OUTPUT_EN(GPIO_NUM_4),
+        #if defined(ULP_START_STOP_TOGGLE_GPIO)
+            I_GPIO_OUTPUT_EN(ULP_START_STOP_GPIO_PIN),
+        #endif
         I_MOVI(R1, 0),
         I_GET(R0, R1, ulp_samples_this_second),
         I_ADDI(R0, R0, 1),
@@ -799,7 +807,9 @@ void ulp_init()
 
         // Halt ULP program and go back to sleep.
         M_LABEL(L_DONE),
-        // I_GPIO_OUTPUT_DIS(GPIO_NUM_4),
+        #if defined(ULP_START_STOP_TOGGLE_GPIO)
+            I_GPIO_OUTPUT_DIS(ULP_START_STOP_GPIO_PIN),
+        #endif
         I_HALT(),  // ^^ 82 instructions ^^
 
         // Include HULP "subroutines" for bitbanged I2C.
@@ -809,8 +819,10 @@ void ulp_init()
     
     // Configure pins for use by the ULP.
     ESP_ERROR_CHECK(hulp_configure_pin(ULP_SCL_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));
-    ESP_ERROR_CHECK(hulp_configure_pin(ULP_SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0));   
-    // ESP_ERROR_CHECK(hulp_configure_pin(GPIO_NUM_4, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1));   
+    ESP_ERROR_CHECK(hulp_configure_pin(ULP_SDA_PIN, RTC_GPIO_MODE_INPUT_ONLY, GPIO_FLOATING, 0)); 
+    #if defined(ULP_START_STOP_TOGGLE_GPIO)  
+        ESP_ERROR_CHECK(hulp_configure_pin(ULP_START_STOP_GPIO_PIN, RTC_GPIO_MODE_OUTPUT_ONLY, GPIO_FLOATING, 1));   
+    #endif
 
     hulp_peripherals_on();
 
