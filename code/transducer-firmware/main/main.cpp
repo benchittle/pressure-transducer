@@ -1,5 +1,3 @@
-#define DIY3
-// #define ULP_START_STOP_TOGGLE_GPIO
 #if !defined(DIY3) && !defined(DIY4) && !defined(DIY5)
     #error "At least one of DIY3, DIY4 and DIY5 targets should be defined"
 #elif !(defined(DIY3) ^ defined(DIY4) ^ defined(DIY5))
