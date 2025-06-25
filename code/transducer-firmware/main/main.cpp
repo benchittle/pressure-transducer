@@ -152,7 +152,7 @@ static_assert(BUFFER_SIZE % MAX_SAMPLE_FREQUENCY == 0, "BUFFER_SIZE must be a mu
 // power to the SD card.
 #if defined(DIY4) || defined(DIY5)
     #define SD_OFF_DELAY_MS 1000
-    #define SD_ON_DELAY_MS 200
+    #define SD_ON_DELAY_MS 500
 #endif
 
 // If set to 1, whenever the device wakes up it will print all pressure readings
@@ -618,9 +618,7 @@ void ulp_init()
         L_LAST_SAMPLE_THIS_SECOND,
         L_SAMPLE_WAIT_LOOP,
         L_WAIT_FOR_ALARM_FAST,
-        L_WASTE_CYCLE_1,
-        L_WASTE_CYCLE_2,
-        L_WASTE_CYCLE_3,
+        L_WASTE_CYCLES,
         L_OVERFLOW,
         L_NO_OVERFLOW,
         L_D2_ALREADY_READ,
@@ -696,11 +694,14 @@ void ulp_init()
         // If we get here, the RTC alarm hasn't gone off yet so we're fast
         // Keep looping and track it.
         M_LABEL(L_WAIT_FOR_ALARM_FAST),
-        I_ADDI(R1, R1, 1),
-        M_BXZ(L_WASTE_CYCLE_3), // Used so that one loop = same # of cycles as earlier loop
-        M_LABEL(L_WASTE_CYCLE_3),
-        I_GPIO_READ(RTC_ALARM_PIN),
-        M_BGE(L_WAIT_FOR_ALARM_FAST, 1),  
+        I_ADDI(R1, R1, 1),                  // 2 + 2 = 4 cycles
+        M_BXZ(L_WASTE_CYCLES),              // 2 + 2 = 4 cycles
+        M_LABEL(L_WASTE_CYCLES),
+        I_GPIO_READ(RTC_ALARM_PIN),         // 4 + 4 = 8 cycles
+        I_ADDI(R1, R1, 0),                  // 2 + 2 = 4 cycles
+        I_ADDI(R1, R1, 0),                  // 2 + 2 = 4 cycles
+        I_ADDI(R1, R1, 0),                  // 2 + 2 = 4 cycles
+        M_BGE(L_WAIT_FOR_ALARM_FAST, 1),    // 2 + 2 = 4 cycles, total = 32
 
         // Compensate: divide the cycles waited by the frequency and increase 
         // the calibration delay by that amount
@@ -808,11 +809,11 @@ void ulp_init()
         #if defined(ULP_START_STOP_TOGGLE_GPIO)
             I_GPIO_OUTPUT_DIS(ULP_START_STOP_GPIO_PIN),
         #endif
-        I_HALT(),  // ^^ 82 instructions ^^
+        I_HALT(),  // ^^ 85 instructions ^^
 
         // Include HULP "subroutines" for bitbanged I2C.
         M_INCLUDE_I2CBB_CMD(L_READ, L_WRITE, ULP_SCL_PIN, ULP_SDA_PIN), // 90 instructions
-        // Total: 172 instructions (might be outdated if I forget to change it :) )
+        // Total: 175 instructions (might be outdated if I forget to change it :) )
     };
     
     // Configure pins for use by the ULP.
