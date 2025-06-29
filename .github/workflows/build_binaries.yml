@@ -22,7 +22,7 @@ jobs:
         esp_idf_version: v5.3.2
         target: esp32
         path: "./code/transducer-firmware/"
-        command: idf.py -DDIY3 build
+        command: idf.py -DTRANSDUCER=DIY3 build
 
     - name: Archive
       run: python ./code/scripts/zip_binaries.py DIY3
