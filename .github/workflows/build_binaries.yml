@@ -1,0 +1,64 @@
+name: Build Binaries
+
+on:
+  push:
+    tags: 
+      - v**
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+      with:
+        submodules: "recursive"
+
+    - name: Build
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.3.2
+        target: esp32
+        path: "./code/transducer-firmware/"
+        command: idf.py -DDIY3 build
+
+    - name: Archive
+      run: python ./code/scripts/zip_binaries.py DIY3
+
+    - name: Determine if prerelease
+      id: prerelease_check
+      run: |
+        if [[ ${{ github.ref_name }} =~ -rc[0-9]+$ ]]; then
+          echo "is_prerelease=true" >> $GITHUB_OUTPUT
+        else
+          echo "is_prerelease=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create release
+      uses: actions/create-release@v1
+      id: create_release
+      with:
+        draft: false
+        prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
+        release_name: ${{ github.ref_name }}
+        tag_name: ${{ github.ref_name }}
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Upload artifact
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./code/transducer-firmware/build/DIY3_firmware.zip
+        asset_name: DIY3_firmware.zip
+        # asset_content_type: application/gzip
+
+    # - name: Upload artifact
+    #   uses: actions/upload-artifact@v4
+    #   with:
+    #     name: DIY3_firmware.zip
+    #     path: code/transducer-firmware/build/DIY3_firmware.zip
