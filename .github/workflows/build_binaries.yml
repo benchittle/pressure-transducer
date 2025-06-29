@@ -30,15 +30,16 @@ jobs:
     - name: Create zip file of firmware artifacts
       id: zip_artifacts
       env:
-        FIRMWARE_VERSION: ${{ github.ref_name }}_DIY3
+        FIRMWARE_VERSION: DIY3_${{ github.ref_name }}
+        ARTIFACTS_FOLDER: ${{ env.FIRMWARE_VERSION }}
       run: |
         mkdir -p ${{ env.FIRMWARE_VERSION }}
-        cp ./code/transducer-firmware/build/bootloader/bootloader.bin ${{ env.FIRMWARE_VERSION }}_bootloader.bin
-        cp ./code/transducer-firmware/build/partition_table/partition-table.bin ${{ env.FIRMWARE_VERSION }}_partition-table.bin
-        cp ./code/transducer-firmware/build/transducer-firmware.bin ${{ env.FIRMWARE_VERSION }}_transducer-firmware.bin
-        cd ${{ env.FIRMWARE_VERSION }}
-        zip ${{ env.FIRMWARE_VERSION }}.zip *.bin
-        echo "archive_path=$(pwd)/${{ env.FIRMWARE_VERSION }}.zip" >> $GITHUB_OUTPUT
+        cp ./code/transducer-firmware/build/bootloader/bootloader.bin ${{ env.ARTIFACTS_FOLDER }}/${{ env.FIRMWARE_VERSION }}_bootloader.bin
+        cp ./code/transducer-firmware/build/partition_table/partition-table.bin ${{ env.ARTIFACTS_FOLDER }}/${{ env.FIRMWARE_VERSION }}_partition-table.bin
+        cp ./code/transducer-firmware/build/transducer-firmware.bin ${{ env.ARTIFACTS_FOLDER }}/${{ env.FIRMWARE_VERSION }}_transducer-firmware.bin
+        cd ${{ env.ARTIFACTS_FOLDER }}
+        zip ${{ env.ARTIFACTS_FOLDER }}.zip *.bin
+        echo "archive_path=$(pwd)/${{ env.ARTIFACTS_FOLDER }}.zip" >> $GITHUB_OUTPUT
         cd ..
 
     # - name: Create GitHub Release and Upload Firmware
