@@ -31,7 +31,7 @@ jobs:
       id: zip_artifacts
       env:
         FIRMWARE_VERSION: DIY3_${{ github.ref_name }}
-        ARTIFACTS_FOLDER: ${{ env.FIRMWARE_VERSION }}
+        ARTIFACTS_FOLDER: DIY3_${{ github.ref_name }}
       run: |
         mkdir -p ${{ env.FIRMWARE_VERSION }}
         cp ./code/transducer-firmware/build/bootloader/bootloader.bin ${{ env.ARTIFACTS_FOLDER }}/${{ env.FIRMWARE_VERSION }}_bootloader.bin
