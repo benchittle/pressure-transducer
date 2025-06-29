@@ -6,50 +6,13 @@ on:
       - v**
 
 jobs:
-  build:
-
+  release:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v2
-      with:
-        submodules: "recursive"
-
-    - name: Build
-      uses: espressif/esp-idf-ci-action@v1
-      with:
-        esp_idf_version: v5.3.2
-        target: esp32
-        path: "./code/transducer-firmware/"
-        command: idf.py -DTRANSDUCER=DIY3 build
-
-    # - name: Archive
-    #   run: python ./code/scripts/zip_binaries.py DIY3
-
-    - name: Create zip file of firmware artifacts
-      id: zip_artifacts
-      env:
-        FIRMWARE_VERSION: DIY3_${{ github.ref_name }}
-        ARTIFACTS_FOLDER: DIY3_${{ github.ref_name }}
-      run: |
-        mkdir -p ${{ env.FIRMWARE_VERSION }}
-        cp ./code/transducer-firmware/build/bootloader/bootloader.bin ${{ env.ARTIFACTS_FOLDER }}/${{ env.FIRMWARE_VERSION }}_bootloader.bin
-        cp ./code/transducer-firmware/build/partition_table/partition-table.bin ${{ env.ARTIFACTS_FOLDER }}/${{ env.FIRMWARE_VERSION }}_partition-table.bin
-        cp ./code/transducer-firmware/build/transducer-firmware.bin ${{ env.ARTIFACTS_FOLDER }}/${{ env.FIRMWARE_VERSION }}_transducer-firmware.bin
-        cd ${{ env.ARTIFACTS_FOLDER }}
-        zip ${{ env.ARTIFACTS_FOLDER }}.zip *.bin
-        echo "archive_path=$(pwd)/${{ env.ARTIFACTS_FOLDER }}.zip" >> $GITHUB_OUTPUT
-        cd ..
-
-    # - name: Create GitHub Release and Upload Firmware
-    #   uses: softprops/action-gh-release@v2
+    # - name: Download all artifacts
+    #   uses: actions/download-artifact@v4
     #   with:
-    #     name: ${{ github.ref_name }}
-    #     tag_name: ${{ github.ref_name }}
-    #     files: artifacts/firmware.zip
-    #   env:
-    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    #     path: artifacts
 
     - name: Determine if prerelease
       id: prerelease_check
@@ -66,33 +29,48 @@ jobs:
         name: ${{ github.ref_name }}
         tag_name: ${{ github.ref_name }}
         prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
-        files: ${{ steps.zip_artifacts.outputs.archive_path }}
+        # files: $(ls artifacts)
+        # files: ${{ steps.zip_artifacts.outputs.archive_path }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    # - name: Create release
-    #   uses: actions/create-release@v1
-    #   id: create_release
-    #   with:
-    #     draft: false
-    #     prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
-    #     release_name: ${{ github.ref_name }}
-    #     tag_name: ${{ github.ref_name }}
-    #   env:
-    #     GITHUB_TOKEN: ${{ github.token }}
+  build:
+    needs: release
+    runs-on: ubuntu-latest
+    strategy: 
+      matrix:
+        target: [DIY3, DIY4, DIY5]
 
-    # - name: Upload artifact
-    #   uses: actions/upload-release-asset@v1
-    #   env:
-    #     GITHUB_TOKEN: ${{ github.token }}
-    #   with:
-    #     upload_url: ${{ steps.create_release.outputs.upload_url }}
-    #     asset_path: ./code/transducer-firmware/build/DIY3_firmware.zip
-    #     asset_name: DIY3_firmware.zip
-        # asset_content_type: application/gzip
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+      with:
+        submodules: "recursive"
 
-    # - name: Upload artifact
-    #   uses: actions/upload-artifact@v4
-    #   with:
-    #     name: DIY3_firmware.zip
-    #     path: code/transducer-firmware/build/DIY3_firmware.zip
+    - name: Build
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: v5.3.2
+        target: esp32
+        path: "./code/transducer-firmware/"
+        command: idf.py -DTRANSDUCER=${{ matrix.target }} build
+
+    - name: Create zip file of firmware artifacts
+      id: zip_artifacts
+      env:
+        ARTIFACTS_FOLDER: ${{ matrix.target }}_${{ github.ref_name }}
+      run: |
+        mkdir -p ${{ env.ARTIFACTS_FOLDER }}
+        cp ./code/transducer-firmware/build/bootloader/bootloader.bin ${{ env.ARTIFACTS_FOLDER }}/
+        cp ./code/transducer-firmware/build/partition_table/partition-table.bin ${{ env.ARTIFACTS_FOLDER }}/
+        cp ./code/transducer-firmware/build/transducer-firmware.bin ${{ env.ARTIFACTS_FOLDER }}/
+        cd ${{ env.ARTIFACTS_FOLDER }}
+        zip ${{ env.ARTIFACTS_FOLDER }}.zip *.bin
+        echo "archive_path=$(pwd)/${{ env.ARTIFACTS_FOLDER }}.zip" >> $GITHUB_OUTPUT
+        cd ..
+
+    - name: Upload Release Asset
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run:
+        gh release upload ${{ github.ref }} ${{ steps.zip_artifacts.outputs.archive_path }}
