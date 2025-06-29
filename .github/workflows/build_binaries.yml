@@ -28,7 +28,18 @@ jobs:
     #   run: python ./code/scripts/zip_binaries.py DIY3
 
     - name: Create zip file of firmware artifacts
-      run: zip DIY3_${{ github.ref_name }}_firmware.zip ./code/transducer-firmware/build/bootloader/bootloader.bin ./code/transducer-firmware/build/partition_table/partition-table.bin ./code/transducer-firmware/build/transducer-firmware.bin
+      id: zip_artifacts
+      env:
+        FIRMWARE_VERSION: ${{ github.ref_name }}_DIY3
+      run: |
+        mkdir -p ${{ env.FIRMWARE_VERSION }}
+        cp ./code/transducer-firmware/build/bootloader/bootloader.bin ${{ env.FIRMWARE_VERSION }}_bootloader.bin
+        cp ./code/transducer-firmware/build/partition_table/partition-table.bin ${{ env.FIRMWARE_VERSION }}_partition-table.bin
+        cp ./code/transducer-firmware/build/transducer-firmware.bin ${{ env.FIRMWARE_VERSION }}_transducer-firmware.bin
+        cd ${{ env.FIRMWARE_VERSION }}
+        zip ${{ env.FIRMWARE_VERSION }}.zip *.bin
+        echo "archive_path=$(pwd)/${{ env.FIRMWARE_VERSION }}.zip" >> $GITHUB_OUTPUT
+        cd ..
 
     # - name: Create GitHub Release and Upload Firmware
     #   uses: softprops/action-gh-release@v2
@@ -54,7 +65,7 @@ jobs:
         name: ${{ github.ref_name }}
         tag_name: ${{ github.ref_name }}
         prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
-        files: DIY3_${{ github.ref_name }}_firmware.zip
+        files: ${{ steps.zip_artifacts.outputs.archive_path }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
