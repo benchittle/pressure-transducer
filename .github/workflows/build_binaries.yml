@@ -24,8 +24,20 @@ jobs:
         path: "./code/transducer-firmware/"
         command: idf.py -DTRANSDUCER=DIY3 build
 
-    - name: Archive
-      run: python ./code/scripts/zip_binaries.py DIY3
+    # - name: Archive
+    #   run: python ./code/scripts/zip_binaries.py DIY3
+
+    - name: Create zip file of firmware artifacts
+      run: zip DIY3_${{ github.ref_name }}_firmware.zip ./code/transducer-firmware/build/bootloader/bootloader.bin ./code/transducer-firmware/build/partition_table/partition-table.bin ./code/transducer-firmware/build/transducer-firmware.bin
+
+    # - name: Create GitHub Release and Upload Firmware
+    #   uses: softprops/action-gh-release@v2
+    #   with:
+    #     name: ${{ github.ref_name }}
+    #     tag_name: ${{ github.ref_name }}
+    #     files: artifacts/firmware.zip
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Determine if prerelease
       id: prerelease_check
@@ -36,25 +48,35 @@ jobs:
           echo "is_prerelease=false" >> $GITHUB_OUTPUT
         fi
 
-    - name: Create release
-      uses: actions/create-release@v1
-      id: create_release
+    - name: Create GitHub Release and Upload Firmware
+      uses: softprops/action-gh-release@v2
       with:
-        draft: false
-        prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
-        release_name: ${{ github.ref_name }}
+        name: ${{ github.ref_name }}
         tag_name: ${{ github.ref_name }}
+        prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
+        files: DIY3_${{ github.ref_name }}_firmware.zip
       env:
-        GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Upload artifact
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./code/transducer-firmware/build/DIY3_firmware.zip
-        asset_name: DIY3_firmware.zip
+    # - name: Create release
+    #   uses: actions/create-release@v1
+    #   id: create_release
+    #   with:
+    #     draft: false
+    #     prerelease: ${{ steps.prerelease_check.outputs.is_prerelease }}
+    #     release_name: ${{ github.ref_name }}
+    #     tag_name: ${{ github.ref_name }}
+    #   env:
+    #     GITHUB_TOKEN: ${{ github.token }}
+
+    # - name: Upload artifact
+    #   uses: actions/upload-release-asset@v1
+    #   env:
+    #     GITHUB_TOKEN: ${{ github.token }}
+    #   with:
+    #     upload_url: ${{ steps.create_release.outputs.upload_url }}
+    #     asset_path: ./code/transducer-firmware/build/DIY3_firmware.zip
+    #     asset_name: DIY3_firmware.zip
         # asset_content_type: application/gzip
 
     # - name: Upload artifact
