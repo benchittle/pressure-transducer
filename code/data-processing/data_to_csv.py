@@ -1,3 +1,11 @@
+"""
+This script allows you to unpack raw .data files into .csv format
+
+Run it with no arguments (i.e. python data_to_csv.py) for a simple GUI
+Or run it from the command line (python data_to_csv.py -h for usage)
+"""
+
+
 import argparse
 import csv
 from datetime import datetime, timedelta, timezone
