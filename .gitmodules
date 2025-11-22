@@ -1,9 +1,0 @@
-[submodule "code/DIY3-DIY4/components/HULP"]
-	path = code/transducer-firmware/components/HULP
-	url = https://github.com/boarchuz/HULP
-[submodule "code/DIY3-DIY4/components/arduino-libraries/ds3231"]
-	path = code/transducer-firmware/components/arduino-libraries/ds3231
-	url = https://github.com/benchittle/rodan-ds3231
-[submodule "code/DIY3-DIY4/components/arduino-libraries/MS5803_05"]
-	path = code/transducer-firmware/components/arduino-libraries/MS5803_05
-	url = https://github.com/benchittle/MS5803_05
