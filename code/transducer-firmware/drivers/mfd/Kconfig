@@ -1,0 +1,10 @@
+if MFD
+
+config MFD_INIT_PRIORITY
+	int "Initialization priority"
+	default 80
+	help
+	  Multi-function devices initialization priority.
+
+rsource "Kconfig.rv3032"
+endif # MFD

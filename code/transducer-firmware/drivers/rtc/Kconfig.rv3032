@@ -1,0 +1,18 @@
+config RTC_RV3032
+	bool "RV-3032 RTC driver"
+	default y
+	depends on DT_HAS_MICROCRYSTAL_RV3032_MFD_ENABLED
+	depends on DT_HAS_MICROCRYSTAL_RV3032_RTC_ENABLED
+	select I2C
+    select MFD
+	help
+	  Enable RTC driver based on Microcrystal RV-3032 I2C device.
+
+config RTC_RV3032_INIT_PRIORITY
+	int "RV-3032 RTC driver initialization priority"
+	depends on RTC_RV3032
+	default 86
+	help
+	  Initialization priority for the RV-3032 RTC driver. It must be
+	  greater than the I2C controller init priority and the mfd driver
+	  init priority.

@@ -1,3 +1,0 @@
-[submodule "code/transducer-firmware"]
-	path = code/transducer-firmware
-	url = git@github.com:benchittle/transducer-firmware.git

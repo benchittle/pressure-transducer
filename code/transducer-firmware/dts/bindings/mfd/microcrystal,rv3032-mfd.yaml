@@ -1,0 +1,69 @@
+description: |
+  Microcrystal RV-3032 I2C MFD
+
+  The following example displays the node layout
+  with every possible partial driver included.
+
+  rv3032: rv3032@51 {
+          compatible = "microcrystal,rv3032-mfd";
+          reg = <0x51>;
+          backup-switch-mode = "level";
+          trickle-resistor-ohms = 600;
+          trickle-charger-mode = "3.00V";
+          int-gpios = <&gpio0 4 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+
+          rv3032_sensor: rv3032-sensor {
+                  compatible = "microcrystal,rv3032-sensor";
+                  status = "okay";
+          };
+
+          rv3032_rtc: rv3032-rtc {
+                  compatible = "microcrystal,rv3032-rtc";
+                  status = "okay";
+          };
+  };
+
+compatible: "microcrystal,rv3032-mfd"
+
+include: [i2c-device.yaml]
+
+properties:
+  backup-switch-mode:
+    type: string
+    required: true
+    enum:
+      - "disabled"
+      - "direct"
+      - "level"
+    description: |
+      Automatic backup switchover function selection:
+        - disabled: The switchover function is disabled - only one power supply available (VDD)
+        - direct: Direct Switching Mode (DSM): when VDD < VBACKUP, switchover occurs from VDD to
+          VBACKUP without requiring VDD to drop below VTH:LSM (2.0 V)
+        - level: Level Switching Mode (LSM): when VDD < VTH:LSM (2.0 V) AND VBACKUP > VTH:LSM,
+          switchover occurs from VDD to VBACKUP
+
+  trickle-resistor-ohms:
+    type: int
+    enum:
+      - 600
+      - 2000
+      - 7000
+      - 12000
+    description: |
+      Trickle charger series resistance.
+
+  trickle-charger-mode:
+    type: string
+    enum:
+      - "off"
+      - "1.75V"
+      - "3.00V"
+      - "4.50V"
+    description: |
+      Charge pump voltage for trickle charger, if enabled.
+
+  int-gpios:
+    type: phandle-array
+    description: |
+      GPIO connected to the RV3032 INT interrupt output. This signal is open-drain, active low.

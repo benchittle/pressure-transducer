@@ -1,0 +1,7 @@
+config MFD_RV3032
+	bool "RV-3032 multi-function device driver"
+	default y
+	depends on DT_HAS_MICROCRYSTAL_RV3032_MFD_ENABLED
+	select I2C
+	help
+	  Enable the Microcrystal RV-3032 multi-function device driver

@@ -1,0 +1,5 @@
+description: Microcrystal RV-3032 I2C temperature sensor 
+
+compatible: "microcrystal,rv3032-sensor"
+
+include: [sensor-device.yaml]

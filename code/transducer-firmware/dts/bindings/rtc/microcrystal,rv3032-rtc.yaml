@@ -1,0 +1,31 @@
+description: Microcrystal RV-3032 I2C real time clock
+
+compatible: "microcrystal,rv3032-rtc"
+
+include: [rtc-device.yaml]
+
+# properties:
+  # clkout-frequency:
+  #   type: int
+  #   enum:
+  #     - 32768
+  #     - 8192
+  #     - 1024
+  #     - 64
+  #     - 32
+  #     - 1
+  #   description: |
+  #     Frequency of the CLKOUT signal in Hertz (Hz). If omitted, the CLKOUT pin is LOW.
+
+# dependencies:
+#   trickle-resistor-ohms: ["trickle-charger-mode"]
+#   trickle-charger-mode: ["trickle-resistor-ohms"]
+# allOf:
+#   - if:
+#       required: ["trickle-resistor-ohms"]
+#     then:
+#       required: ["trickle-charger-mode"]
+#   - if:
+#       required: ["trickle-charger-mode"]
+#     then:
+#       required: ["trickle-resistor-ohms"]

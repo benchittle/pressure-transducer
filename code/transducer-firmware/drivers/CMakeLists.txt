@@ -1,0 +1,3 @@
+add_subdirectory_ifdef(CONFIG_MFD mfd)
+add_subdirectory_ifdef(CONFIG_RTC rtc)
+add_subdirectory_ifdef(CONFIG_SENSOR sensor)
