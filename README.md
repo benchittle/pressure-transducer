@@ -25,7 +25,7 @@ For housing assembly, refer to the resources from [Temple et al. 2020](https://d
 - Other resources: https://coastal.msstate.edu/waves
 
 ### User Guide
-See the full (**but outdated**) [user guide](documentation/DIY3-DIY4/DIY3-DIY4_Guide.pdf) for an idea of how to use these devices. The updated capabilities are shown below.
+See the full [user guide](documentation/DIY3-DIY4/DIY3-DIY4_Guide.pdf) for an idea of how to use these devices.
 
 ## Capabilities
 ![A plot of some wave data](./documentation/imgs/example-wave-data.png)
