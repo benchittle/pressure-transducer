@@ -1,5 +1,5 @@
-#include <zephyr/drivers/mfd/rv3032.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/mfd/rv3032.h>
 #include <zephyr/drivers/rtc.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -18,22 +18,20 @@ struct rtc_rv3032_config {
 };
 
 struct rtc_rv3032_data {
+#if RTC_RV3032_INTERRUPTS
     struct k_sem lock;
-
-#if RV3032_INT_GPIOS_IN_USE
 	const struct device* dev;
-	struct gpio_callback int_callback;
 	struct k_work work;
 
-#ifdef CONFIG_RTC_ALARM
+#if defined(CONFIG_RTC_ALARM)
 	rtc_alarm_callback alarm_callback;
 	void* alarm_user_data;
 #endif /* CONFIG_RTC_ALARM */
-#ifdef CONFIG_RTC_UPDATE
+#if defined(CONFIG_RTC_UPDATE)
 	rtc_update_callback update_callback;
 	void *update_user_data;
 #endif /* CONFIG_RTC_UPDATE */
-#endif /* RV3032_INT_GPIOS_IN_USE */
+#endif /* RTC_RV3032_INTERRUPTS */
 };
 
 
@@ -47,12 +45,15 @@ void rtc_rv3032_unlock_sem(const struct device* dev) {
     k_sem_give(&data->lock);
 }
 
-#if RV3032_INT_GPIOS_IN_USE
+#if RTC_RV3032_INTERRUPTS
 
+/* Called by parent MFD driver to handle interrupts if enabled.
+ */
 static void rtc_rv3032_work_cb(struct k_work* work) {
 	struct rtc_rv3032_data* data = CONTAINER_OF(work, struct rtc_rv3032_data, work);
 	const struct device* dev = data->dev;
     const struct rtc_rv3032_config* config = dev->config;
+
 	rtc_alarm_callback alarm_callback = NULL;
 	void* alarm_user_data = NULL;
 	rtc_update_callback update_callback = NULL;
@@ -116,7 +117,7 @@ unlock:
 	}
 }
 
-#endif // RV3032_INT_GPIOS_IN_USE
+#endif // RTC_RV3032_INTERRUPTS
 
 static int rtc_rv3032_set_time(const struct device* dev, const struct rtc_time* timeptr) {
     const struct rtc_rv3032_config* config = dev->config;
@@ -281,14 +282,6 @@ static int rtc_rv3032_alarm_is_pending(const struct device* dev, uint16_t id) {
 
 static int rtc_rv3032_alarm_set_callback(const struct device* dev, uint16_t id,
 				                         rtc_alarm_callback callback, void* user_data) {
-#if !RV3032_INT_GPIOS_IN_USE
-	ARG_UNUSED(dev);
-	ARG_UNUSED(id);
-	ARG_UNUSED(callback);
-	ARG_UNUSED(user_data);
-
-	return -ENOTSUP;
-#else
 	const struct rtc_rv3032_config* config = dev->config;
     const struct mfd_rv3032_config* mfd_config = config->mfd->config;
 	struct rtc_rv3032_data* data = dev->data;
@@ -324,16 +317,14 @@ unlock:
 	k_work_submit(&data->work);
 
 	return err;
-#endif /* RV3032_INT_GPIOS_IN_USE */
 }
 
 #endif /* CONFIG_RTC_ALARM */
 
-#if RV3032_INT_GPIOS_IN_USE && defined(CONFIG_RTC_UPDATE)
+#if defined(CONFIG_RTC_UPDATE)
 
 static int rtc_rv3032_update_set_callback(const struct device *dev, rtc_update_callback callback,
-				                          void *user_data)
-{
+				                          void *user_data) {
 	const struct rtc_rv3032_config* config = dev->config;
     const struct mfd_rv3032_config* mfd_config = config->mfd->config;
 	struct rtc_rv3032_data* data = dev->data;
@@ -363,7 +354,19 @@ unlock:
 	return err;
 }
 
-#endif /* RV3032_INT_GPIOS_IN_USE && defined(CONFIG_RTC_UPDATE) */
+#endif /* defined(CONFIG_RTC_UPDATE) */
+
+#if defined(CONFIG_RTC_CALIBRATION)
+
+int rtc_rv3032_set_calibration(const struct device *dev, int32_t calibration) {
+    return -ENOTSUP;
+}
+
+int rtc_rv3032_get_calibration(const struct device *dev, int32_t* calibration) {
+    return -ENOTSUP;
+}
+
+#endif
 
 static DEVICE_API(rtc, driver_api) = {
 	.set_time = rtc_rv3032_set_time,
@@ -380,34 +383,27 @@ static DEVICE_API(rtc, driver_api) = {
 	.update_set_callback = rtc_rv3032_update_set_callback,
 #endif /* CONFIG_RTC_UPDATE */
 
-// #ifdef CONFIG_RTC_CALIBRATION
-// /*.set_calibration = set_calibration,
-//  * .get_calibration = get_calibration,
-//  */
-// #endif /* CONFIG_RTC_CALIBRATION */
+#ifdef CONFIG_RTC_CALIBRATION
+    .set_calibration = rtc_rv3032_set_calibration,
+    .get_calibration = rtc_rv3032_get_calibration,
+#endif /* CONFIG_RTC_CALIBRATION */
 };
 
 static int rtc_rv3032_init(const struct device* dev) {
-	int err = 0;
-
 	const struct rtc_rv3032_config* config = dev->config;
-    const struct mfd_rv3032_config* mfd_config = config->mfd->config;
     struct rtc_rv3032_data* data = dev->data;
     struct mfd_rv3032_data* mfd_data = config->mfd->data;
-
-    k_sem_init(&data->lock, 1, 1);
 
 	if (!device_is_ready(config->mfd)) {
 		return -ENODEV;
 	}
 
-#if RV3032_INT_GPIOS_IN_USE
-	if (mfd_config->gpio_int.port != NULL) {
-		data->dev = dev;
-		data->work.handler = rtc_rv3032_work_cb;
-        mfd_data->work_rtc = &data->work;
-	}
-#endif /* RV3032_INT_GPIOS_IN_USE */
+#if RTC_RV3032_INTERRUPTS
+    k_sem_init(&data->lock, 1, 1);
+    data->dev = dev;
+    data->work.handler = rtc_rv3032_work_cb;
+    mfd_data->work_rtc = &data->work;
+#endif /* RTC_RV3032_INTERRUPTS */
 
 	return 0;
 }

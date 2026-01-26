@@ -1,0 +1,3 @@
+if COUNTER
+rsource "Kconfig.rv3032"
+endif # RTC

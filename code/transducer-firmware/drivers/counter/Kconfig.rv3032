@@ -1,0 +1,17 @@
+config COUNTER_RV3032
+	bool "RV-3032 counter driver"
+	default y
+	depends on DT_HAS_MICROCRYSTAL_RV3032_MFD_ENABLED
+	depends on DT_HAS_MICROCRYSTAL_RV3032_COUNTER_ENABLED
+	select I2C
+    select MFD
+	help
+	  Enable driver for Microcrystal RV-3032 counter device.
+
+config COUNTER_RV3032_INIT_PRIORITY
+	int "RV-3032 counter driver initialization priority"
+	depends on COUNTER_RV3032
+	default 86
+	help
+	  Initialization priority for the RV-3032 counter driver. It must be
+	  greater than MFD_INIT_PRIORITY.

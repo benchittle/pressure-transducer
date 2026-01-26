@@ -61,7 +61,7 @@ int mfd_rv3032_i2c_update_register(const struct device* dev, uint8_t addr,
 	return 0;
 }
 
-#if RV3032_INT_GPIOS_IN_USE || 1
+#if RV3032_INTERRUPTS
 
 // Interrupt handler for sub drivers. E.g. if RTC alarms are enabled, it will
 // add the RTC interrupt callback to the work queue. 
@@ -72,17 +72,22 @@ static void mfd_rv3032_int_handler(const struct device* port, struct gpio_callba
 	ARG_UNUSED(port);
 	ARG_UNUSED(pins);
 
-#ifdef CONFIG_RTC_ALARM
+#ifdef COUNTER_RV3032_INTERRUPTS
+    __ASSERT(data->work_counter != NULL, "data->work_counter is NULL");
+    k_work_submit(data->work_counter);
+#endif /* COUNTER_RV3032_INTERRUPTS */
+
+#ifdef RTC_RV3032_INTERRUPTS 
+    __ASSERT(data->work_rtc != NULL, "data->work_rtc is NULL");
 	k_work_submit(data->work_rtc);
-#endif /* CONFIG_RTC_ALARM */
+#endif /* RTC_RV3032_INTERRUPTS */
 
 // ifdef CONFIG_RTC_UPDATE .....
 }
 
-#endif // RV3032_INT_GPIOS_IN_USE
+#endif // RV3032_INTERRUPTS
 
-static int mfd_rv3032_init(const struct device *dev)
-{
+static int mfd_rv3032_init(const struct device* dev) {
     int err;
     uint8_t status;
     uint8_t regs[3];
@@ -96,7 +101,7 @@ static int mfd_rv3032_init(const struct device *dev)
 		return -ENODEV;
 	}
 
-#if RV3032_INT_GPIOS_IN_USE
+#if RV3032_INTERRUPTS
 	if (config->gpio_int.port != NULL) {
 		if (!gpio_is_ready_dt(&config->gpio_int)) {
 			LOG_ERR("GPIO not ready");
@@ -126,7 +131,7 @@ static int mfd_rv3032_init(const struct device *dev)
 
 		data->dev = dev;
 	}
-#endif /* RV3032_INT_GPIOS_IN_USE */
+#endif /* RV3032_INTERRUPTS */
 
     // If power was lost, clear the flag in the status register. Otherwise, put
     // device status and control registers into known state.
@@ -137,6 +142,8 @@ static int mfd_rv3032_init(const struct device *dev)
 		return -ENODEV;
 	}
     if (status & RV3032_MASK_STATUS_PORF) {
+        // Control registers already reset after power lost
+        
         LOG_DBG("device lost power, clock time should be reset");
 
         err = mfd_rv3032_i2c_update_register(dev, RV3032_REG_STATUS, RV3032_MASK_STATUS_PORF, 0);
@@ -193,10 +200,10 @@ static int mfd_rv3032_init(const struct device *dev)
 }
 
 #define MFD_RV3032_BSM_FROM_DT_INST(inst)                                           \
-	UTIL_CAT(RV3032_PMU_BSM_, DT_INST_STRING_UPPER_TOKEN(inst, backup_switch_mode))
+	UTIL_CAT(MFD_RV3032_PMU_BSM_, DT_INST_STRING_UPPER_TOKEN(inst, backup_switch_mode))
 
 #define MFD_RV3032_TCM_FROM_DT_INST(inst)                                                       \
-    UTIL_CAT(RV3032_PMU_TCM_, DT_INST_STRING_UPPER_TOKEN_OR(inst, trickle_charger_mode, OFF))
+    UTIL_CAT(MFD_RV3032_PMU_TCM_, DT_INST_STRING_UPPER_TOKEN_OR(inst, trickle_charger_mode, OFF))
 
 #define MFD_RV3032_BACKUP_FROM_DT_INST(inst)                                                        \
 	((FIELD_PREP(RV3032_MASK_PMU_BSM, MFD_RV3032_BSM_FROM_DT_INST(inst))) |                         \
@@ -207,11 +214,14 @@ static int mfd_rv3032_init(const struct device *dev)
 	static const struct mfd_rv3032_config config##inst = {                      \
         .i2c_bus = I2C_DT_SPEC_INST_GET(inst),                                  \
         .backup = MFD_RV3032_BACKUP_FROM_DT_INST(inst),                         \
-        IF_ENABLED(RV3032_INT_GPIOS_IN_USE,                                     \
+        IF_ENABLED(RV3032_INTERRUPTS,                                           \
 			   (.gpio_int = GPIO_DT_SPEC_INST_GET_OR(inst, int_gpios, {0})))    \
     };                                                                          \
 	static struct mfd_rv3032_data data##inst = {                                \
-        .work_rtc = NULL,                                                       \
+        IF_ENABLED(RTC_RV3032_INTERRUPTS,                                       \
+            (.work_rtc = NULL,))                                                \
+        IF_ENABLED(COUNTER_RV3032_INTERRUPTS,                                   \
+            (.work_counter = NULL,))                                            \
     };                                                                          \
 	DEVICE_DT_INST_DEFINE(inst,                                                 \
         &mfd_rv3032_init,                                                       \

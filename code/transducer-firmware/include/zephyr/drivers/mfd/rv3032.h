@@ -164,14 +164,20 @@
  * CONFIGURATIONS 
  */
 
-#define RV3032_PMU_BSM_DISABLED         0b00
-#define RV3032_PMU_BSM_DIRECT           0b01
-#define RV3032_PMU_BSM_LEVEL            0b10
+#define MFD_RV3032_PMU_BSM_DISABLED         0b00
+#define MFD_RV3032_PMU_BSM_DIRECT           0b01
+#define MFD_RV3032_PMU_BSM_LEVEL            0b10
 
-#define RV3032_PMU_TCM_OFF              0b00
-#define RV3032_PMU_TCM_1_75V            0b01
-#define RV3032_PMU_TCM_3_00V            0b10
-#define RV3032_PMU_TCM_4_50V            0b11
+#define MFD_RV3032_PMU_TCM_OFF              0b00
+#define MFD_RV3032_PMU_TCM_1_75V            0b01
+#define MFD_RV3032_PMU_TCM_3_00V            0b10
+#define MFD_RV3032_PMU_TCM_4_50V            0b11
+
+
+#define COUNTER_RV3032_FREQ_4096            0b00
+#define COUNTER_RV3032_FREQ_64              0b01
+#define COUNTER_RV3032_FREQ_1               0b10
+#define COUNTER_RV3032_FREQ_1_60            0b11
 
 
 #define RV3032_TEMPERATURE_INT_BITS     8
@@ -184,11 +190,21 @@
 	 RTC_ALARM_TIME_MASK_MONTH | RTC_ALARM_TIME_MASK_MONTHDAY | RTC_ALARM_TIME_MASK_YEAR |     \
 	 RTC_ALARM_TIME_MASK_WEEKDAY)
 
-/* Helper macro to guard int-gpios related code */
-#if DT_ANY_COMPAT_HAS_PROP_STATUS_OKAY(microcrystal_rv3032_mfd, int_gpios) &&   \
-	(defined(CONFIG_RTC_ALARM) || defined(CONFIG_RTC_UPDATE))
-    //TODO: Add CONFIG_COUNTDOWN_TIMER or whatever it is
-#define RV3032_INT_GPIOS_IN_USE 1
+/* Helper macros to guard int-gpios related code */
+#if DT_ANY_COMPAT_HAS_PROP_STATUS_OKAY(microcrystal_rv3032_mfd, int_gpios)
+
+#if defined(CONFIG_RTC_ALARM) || defined(CONFIG_RTC_UPDATE) || defined(CONFIG_COUNTER)
+#define RV3032_INTERRUPTS 1
+#endif 
+
+#if defined(CONFIG_RTC_ALARM) || defined(CONFIG_RTC_UPDATE)
+#define RTC_RV3032_INTERRUPTS 1
+#endif
+
+#if defined(CONFIG_COUNTER)
+#define COUNTER_RV3032_INTERRUPTS 1
+#endif
+
 #endif
 
 /**
@@ -223,7 +239,7 @@ int mfd_rv3032_i2c_set_registers(const struct device *dev, uint8_t addr,
  * @brief Update a register on an I2C device at the given register address.
  *
  * @param dev rv3032 mfd device
- * @param start_reg The register address to update.
+ * @param addr The register address to update.
  * @param mask Bitmask of bits to set/unset based on val.
  * @param val New value to write for masked bits.
  * @retval 0 on success
@@ -235,21 +251,23 @@ int mfd_rv3032_i2c_update_register(const struct device* dev, uint8_t addr,
 struct mfd_rv3032_config {
     struct i2c_dt_spec i2c_bus;
     const uint8_t backup;
-#if RV3032_INT_GPIOS_IN_USE
+#if RV3032_INTERRUPTS
     struct gpio_dt_spec gpio_int;
-#endif /* RV3032_INT_GPIOS_IN_USE */
+#endif /* RV3032_INTERRUPTS */
 };
 
 struct mfd_rv3032_data {
 	struct k_sem lock;
-#if RV3032_INT_GPIOS_IN_USE
+#if RV3032_INTERRUPTS
 	const struct device *dev;
     struct gpio_callback int_callback;
-#ifdef CONFIG_RTC_ALARM
+#if RTC_RV3032_INTERRUPTS
     struct k_work* work_rtc; // To be set by child driver
-#endif /* CONFIG_RTC_ALARM */
-// #ifdef CONFIG_COUNTER???
-#endif /* RV3032_INT_GPIOS_IN_USE */
+#endif /* RTC_RV3032_INTERRUPTS */
+#if COUNTER_RV3032_INTERRUPTS
+    struct k_work* work_counter; // To be set by child driver
+#endif /* COUNTER_RV3032_INTERRUPTS */
+#endif /* RV3032_INTERRUPTS */
 };
 
 #endif /* ZEPHYR_INCLUDE_DRIVERS_MFD_RV3032_H_ */

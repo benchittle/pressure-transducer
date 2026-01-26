@@ -7,7 +7,7 @@
 
 #include <zephyr/drivers/rtc.h>
 
-#define Q31_DIVISOR 2147483648.0f // 2^31
+#define Q31_DIVISOR 2147483648.0 // 2^31
 
 #define TEMP_CHANNEL (struct sensor_chan_spec){SENSOR_CHAN_AMBIENT_TEMP, 0}
 

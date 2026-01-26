@@ -1,0 +1,17 @@
+description: Microcrystal RV-3032 I2C counter
+
+compatible: "microcrystal,rv3032-counter"
+
+include: [base.yaml]
+
+properties:
+  freq:
+    type: string
+    required: true
+    enum:
+      - "4096"
+      - "64"
+      - "1"
+      - "1/60"
+    description: |
+      Periodic countdown timer clock frequency (Hz).

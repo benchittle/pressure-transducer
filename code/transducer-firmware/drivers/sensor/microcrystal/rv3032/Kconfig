@@ -9,13 +9,10 @@ config SENSOR_RV3032
 	help
 	  Enable driver for RV-3032 I2C-based temperature sensor.
 
-if SENSOR_RV3032
-
 config SENSOR_RV3032_INIT_PRIORITY
 	int "RV-3032 sensor driver init priority"
+    depends on SENSOR_RV3032
 	default 86
 	help
       Init priority for the RV-3032 sensor driver. It must be
       greater than MFD_INIT_PRIORITY.
-
-endif # SENSOR_RV3032
