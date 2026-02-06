@@ -1,11 +1,12 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/timeutil.h>
+#include <zephyr/drivers/counter.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/rtc.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/rtio/rtio.h>
 
-#include <zephyr/drivers/rtc.h>
 
 #define Q31_DIVISOR 2147483648.0 // 2^31
 
@@ -16,6 +17,7 @@ LOG_MODULE_REGISTER(i2c_example, LOG_LEVEL_INF);
 static const struct device* rv3032_mfd = DEVICE_DT_GET(DT_NODELABEL(rv3032));
 static const struct device* rv3032_rtc = DEVICE_DT_GET(DT_NODELABEL(rv3032_rtc));
 static const struct device* rv3032_sensor = DEVICE_DT_GET(DT_NODELABEL(rv3032_sensor));
+static const struct device* rv3032_counter = DEVICE_DT_GET(DT_NODELABEL(rv3032_counter));
 // static const struct device* rv3032_sensor = DEVICE_DT_GET(DT_NODELABEL(rv3032_sensor));
 
 SENSOR_DT_READ_IODEV(temp_iodev, DT_NODELABEL(rv3032_sensor), TEMP_CHANNEL);
@@ -36,12 +38,16 @@ void alarm_callback(const struct device *dev, uint16_t id, void *user_data) {
     LOG_INF("String is: %s", data->string);
 }
 
+void counter_callback(const struct device* dev, void *user_data) {
+    LOG_INF("Counter calling you back :)");
+}
+
 int main(void) {
     uint8_t buf[10];
     struct sensor_q31_data temperature_sensor_data = {0};
     uint16_t mask;
     struct rtc_time t;
-    struct alarm_cb_data cb_data = {.string = "BINGUS"};
+    struct alarm_cb_data cb_data = {.string = "BINGUS IS ME"};
     int ret;
 
     struct sensor_decode_context temperature_decoder = SENSOR_DECODE_CONTEXT_INIT(
@@ -70,6 +76,11 @@ int main(void) {
         return 1;
     }
 
+    if (!device_is_ready(rv3032_counter)) {
+        LOG_ERR("Counter device not ready");
+        return 1;
+    }
+
     // TEMPERATURE //
 
     // const struct sensor_decoder_api *dec;
@@ -80,7 +91,7 @@ int main(void) {
     // dec->get_size_info(TEMP_CHANNEL, &base_sz, &frame_sz);
     //
     // uint16_t avail_frames;
-    // dec->get_frame_count(buf, TEMP_CHANNEL, &avail_frames);\
+    // dec->get_frame_count(buf, TEMP_CHANNEL, &avail_frames);
 
     // RTC //
 
@@ -91,11 +102,11 @@ int main(void) {
     }
     LOG_INF("Supported fields: %02x", mask);
 
-    LOG_INF("Setting callback");
-    if ((ret = rtc_alarm_set_callback(rv3032_rtc, 0, alarm_callback, &cb_data)) != 0) {
-        LOG_ERR("Failed to set alarm callback: %d", ret);
-        return 1;
-    }
+    // LOG_INF("Setting callback");
+    // if ((ret = rtc_alarm_set_callback(rv3032_rtc, 0, alarm_callback, &cb_data)) != 0) {
+    //     LOG_ERR("Failed to set alarm callback: %d", ret);
+    //     return 1;
+    // }
     
     LOG_INF("Getting time");
     if (rtc_get_time(rv3032_rtc, &t) != 0) {
@@ -106,15 +117,33 @@ int main(void) {
     if (t.tm_min == 60) {
         t.tm_min = 0;
     }
-    LOG_INF("Setting alarm time");
-    if (rtc_alarm_set_time(rv3032_rtc, 0, RTC_ALARM_TIME_MASK_MINUTE, &t) != 0) {
-        LOG_ERR("Failed to set RTC alarm");
+    // LOG_INF("Setting alarm time");
+    // if (rtc_alarm_set_time(rv3032_rtc, 0, RTC_ALARM_TIME_MASK_MINUTE, &t) != 0) {
+    //     LOG_ERR("Failed to set RTC alarm");
+    //     return 1;
+    // }
+    // if (rtc_alarm_get_time(rv3032_rtc, 0, &mask, &t) != 0) {
+    //     LOG_ERR("RTC Alarm Mask: %x;\t\tminutes: %02d;\t\thours: %02d", mask, t.tm_min, t.tm_hour);
+    //     return 1;
+    // }
+
+    LOG_INF("Setting up counter");
+    const struct counter_top_cfg counter_cfg = {
+        .ticks = 64,
+        .flags = 0,
+        .callback = counter_callback,
+        .user_data = NULL,
+    };
+    if (counter_set_top_value(rv3032_counter, &counter_cfg)) {
+        LOG_ERR("Failed to setup counter top value");
         return 1;
     }
-    if (rtc_alarm_get_time(rv3032_rtc, 0, &mask, &t) != 0) {
-        LOG_ERR("RTC Alarm Mask: %x;\t\tminutes: %02d;\t\thours: %02d", mask, t.tm_min, t.tm_hour);
+    if (counter_start(rv3032_counter)) {
+        LOG_ERR("Failed to start counter");
         return 1;
     }
+
+
 
     // struct rtc_time t = {
     //     .tm_nsec = 0,

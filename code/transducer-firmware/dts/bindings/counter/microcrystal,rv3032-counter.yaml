@@ -1,4 +1,17 @@
-description: Microcrystal RV-3032 I2C counter
+description: |
+  Microcrystal RV-3032 I2C counter
+
+  Caveats:
+  - When starting the counter (counting down from N ticks), 
+    the duration of the first cycle may be anywhere from N 
+    to N+1 ticks. This is a hardware limitation.
+  - Since the RV-3032 does not support reading the current 
+    ticks value of the counter, only relative alarms are 
+    supported.
+  - Additionally, only one of the alarm of top callbacks can
+    be active at a time. Setting a (one shot) alarm will 
+    NULL the top callback, and setting a top callback will
+    NULL the alarm callback.
 
 compatible: "microcrystal,rv3032-counter"
 

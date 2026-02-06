@@ -25,5 +25,10 @@
         rv3032_sensor: rv3032-sensor {
             compatible = "microcrystal,rv3032-sensor";
         };
+
+        rv3032_counter: rv3032-counter {
+            compatible = "microcrystal,rv3032-counter";
+            freq = "64";
+        };
 	};
 };

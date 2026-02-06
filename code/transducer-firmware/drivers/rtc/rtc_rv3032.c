@@ -403,6 +403,17 @@ static int rtc_rv3032_init(const struct device* dev) {
     data->dev = dev;
     data->work.handler = rtc_rv3032_work_cb;
     mfd_data->work_rtc = &data->work;
+
+#if CONFIG_RTC_ALARM
+    data->alarm_callback = NULL;
+    data->alarm_user_data = NULL;
+#endif /* CONFIG_RTC_ALARM */
+
+#if CONFIG_RTC_UPDATE
+    data->update_callback = NULL;
+    data->alarm_user_data = NULL;
+#endif /* CONFIG_RTC_UPDATE */
+
 #endif /* RTC_RV3032_INTERRUPTS */
 
 	return 0;
