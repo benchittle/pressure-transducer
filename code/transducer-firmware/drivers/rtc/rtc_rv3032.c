@@ -305,10 +305,8 @@ static int rtc_rv3032_alarm_set_callback(const struct device* dev, uint16_t id,
                                          RV3032_MASK_CONTROL2_AIE,
 				                         callback != NULL ? RV3032_MASK_CONTROL2_AIE : 0);
 	if (err) {
-        LOG_ERR("failed i2c");
 		goto unlock;
 	}
-    LOG_INF("succeeded i2c");
 
 unlock:
 	rtc_rv3032_unlock_sem(dev);

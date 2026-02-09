@@ -38,8 +38,12 @@ void alarm_callback(const struct device *dev, uint16_t id, void *user_data) {
     LOG_INF("String is: %s", data->string);
 }
 
-void counter_callback(const struct device* dev, void *user_data) {
-    LOG_INF("Counter calling you back :)");
+void counter_top_callback(const struct device* dev, void *user_data) {
+    LOG_INF("Counter calling you back :) HHHHHHHHHHHHHHHH");
+}
+
+void counter_alarm_callback(const struct device* dev, uint8_t chan_id, uint32_t ticks, void *user_data) {
+    LOG_INF("ALARM Counter calling you back :) GGGGGGGGGG");
 }
 
 int main(void) {
@@ -128,21 +132,32 @@ int main(void) {
     // }
 
     LOG_INF("Setting up counter");
-    const struct counter_top_cfg counter_cfg = {
-        .ticks = 64,
+    const struct counter_top_cfg top_cfg = {
+        .ticks = 128,
         .flags = 0,
-        .callback = counter_callback,
+        .callback = counter_top_callback,
         .user_data = NULL,
     };
-    if (counter_set_top_value(rv3032_counter, &counter_cfg)) {
-        LOG_ERR("Failed to setup counter top value");
+    // ret = counter_set_top_value(rv3032_counter, &top_cfg);
+    // if (ret) {
+    //     LOG_ERR("Failed to setup counter top value: %d", ret);
+    //     return 1;
+    // }
+    const struct counter_alarm_cfg alarm_cfg = {
+        .ticks = 128,
+        .flags = 0,
+        .callback = counter_alarm_callback,
+        .user_data = NULL,
+    };
+    ret = counter_set_channel_alarm(rv3032_counter, 0, &alarm_cfg);
+    if (ret) {
+        LOG_ERR("Failed to setup counter top value: %d", ret);
         return 1;
     }
     if (counter_start(rv3032_counter)) {
         LOG_ERR("Failed to start counter");
         return 1;
     }
-
 
 
     // struct rtc_time t = {

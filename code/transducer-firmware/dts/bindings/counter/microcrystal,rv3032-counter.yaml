@@ -12,6 +12,8 @@ description: |
     be active at a time. Setting a (one shot) alarm will 
     NULL the top callback, and setting a top callback will
     NULL the alarm callback.
+  - If the periodic countdown timer is clocked at 1/60 Hz, 
+    calling counter_get_frequency will return 1 Hz.
 
 compatible: "microcrystal,rv3032-counter"
 
