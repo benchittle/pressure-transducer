@@ -19,6 +19,7 @@ struct counter_rv3032_config {
 
 struct counter_rv3032_data {
     bool counter_is_running;
+    uint16_t top_value;
 
     struct k_sem lock;
 	const struct device* dev;
@@ -146,24 +147,24 @@ int counter_rv3032_get_value(const struct device* dev, uint32_t* ticks)
     return -ENOTSUP;
 }
 
-int counter_rv3032_get_value_64(const struct device* dev, uint64_t* ticks) 
-{
-	return -ENOTSUP;
-}
-
 int counter_rv3032_reset(const struct device* dev) 
 {
-    int err = counter_rv3032_stop(dev);
-    if (err) {
-        LOG_ERR("Failed to stop counter for reset (err = %d)", err);
-        return err;
-    }
-    err = counter_rv3032_start(dev);
-    if (err) {
-        LOG_ERR("Failed to stop counter for reset (err = %d)", err);
-        return err;
-    }
-    return 0;
+    const struct counter_rv3032_config *config = dev->config;
+    struct counter_rv3032_data *data = dev->data;
+    // int err = counter_rv3032_stop(dev);
+    // if (err) {
+    //     LOG_ERR("Failed to stop counter for reset (err = %d)", err);
+    //     return err;
+    // }
+    // err = counter_rv3032_start(dev);
+    // if (err) {
+    //     LOG_ERR("Failed to stop counter for reset (err = %d)", err);
+    //     return err;
+    // }
+
+    uint8_t timer_value_0 = data->top_value & 0xff;
+    int err = mfd_rv3032_i2c_set_registers(config->mfd, RV3032_REG_TIMER_VALUE0, &timer_value_0, sizeof(timer_value_0));
+    return err;
 }
 
 int counter_rv3032_set_alarm(const struct device* dev, uint8_t chan_id, 
@@ -171,7 +172,7 @@ int counter_rv3032_set_alarm(const struct device* dev, uint8_t chan_id,
 {
     const struct counter_rv3032_config* config = dev->config;
     struct counter_rv3032_data* data = dev->data;
-    int err = 0;
+    int err;
     bool counter_was_running = false;
 
     /* Don't need to check channel ID, this is handled by intermediate API */
@@ -182,9 +183,9 @@ int counter_rv3032_set_alarm(const struct device* dev, uint8_t chan_id,
         return -EINVAL;
     }
     
-    if (alarm_cfg->flags & COUNTER_ALARM_CFG_ABSOLUTE) {
+	if (alarm_cfg->flags & (COUNTER_ALARM_CFG_ABSOLUTE | COUNTER_ALARM_CFG_EXPIRE_WHEN_LATE)) {
         LOG_ERR("Unsupported alarm_cfg->flags: 0x%X" 
-                "(absolute alarms are not supported, use relative alarms)", alarm_cfg->flags);
+                " (absolute alarms / expire when late are not supported, use relative alarms)", alarm_cfg->flags);
         return -ENOTSUP;
     }
 
@@ -304,6 +305,7 @@ int counter_rv3032_set_top_value(const struct device* dev, const struct counter_
 
     data->callback = top_cfg->callback;
     data->user_data = top_cfg->user_data;
+    data->top_value = top_cfg->ticks;
 
     if (counter_was_running) {
         err = counter_rv3032_start(dev);
@@ -345,30 +347,16 @@ uint32_t counter_rv3032_get_top_value(const struct device* dev)
     return ((buf[1] & 0xf) << 8) | (buf[0]);
 }
 
-uint32_t counter_rv3032_get_guard_period(const struct device* dev, uint32_t flags) 
-{
-	return 0;
-}
-
-int counter_rv3032_set_guard_period(const struct device* dev, uint32_t ticks, uint32_t flags) 
-{
-	return -ENOSYS;
-}
-
 static DEVICE_API(counter, driver_api) = {
     .start = counter_rv3032_start,
     .stop = counter_rv3032_stop,
     .get_value = counter_rv3032_get_value,
-    .get_value_64 = counter_rv3032_get_value_64,
     .reset = counter_rv3032_reset,
     .set_alarm = counter_rv3032_set_alarm,
     .cancel_alarm = counter_rv3032_cancel_alarm,
     .set_top_value = counter_rv3032_set_top_value,
     .get_pending_int = counter_rv3032_get_pending_int,
     .get_top_value = counter_rv3032_get_top_value,
-    .get_guard_period = counter_rv3032_get_guard_period,
-    .set_guard_period = counter_rv3032_set_guard_period,
-    .get_freq = NULL, /* Counter API will automatically find it at config->counter_info */
 };
 
 static int counter_rv3032_init(const struct device* dev) 
@@ -451,13 +439,13 @@ static int counter_rv3032_init(const struct device* dev)
 
 #define COUNTER_RV3032_DEFINE(inst)                                                             \
     static const struct counter_rv3032_config config_##inst = {                                 \
-        .freq_config = COUNTER_RV3032_FREQ_FROM_DT_INST(inst),                                  \
         .counter_info = {                                                                       \
             .max_top_value = 4095,                                                              \
             .freq = COUNTER_RV3032_FREQ_CONFIG_TO_HZ(COUNTER_RV3032_FREQ_FROM_DT_INST(inst)),   \
             .flags = 0,                                                                         \
             .channels = 1,                                                                      \
         },                                                                                      \
+        .freq_config = COUNTER_RV3032_FREQ_FROM_DT_INST(inst),                                  \
         .mfd = DEVICE_DT_GET(DT_INST_PARENT(inst)),                                             \
     };                                                                                          \
     static struct counter_rv3032_data data_##inst;                                              \

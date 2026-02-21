@@ -28,7 +28,7 @@
 
         rv3032_counter: rv3032-counter {
             compatible = "microcrystal,rv3032-counter";
-            freq = "64";
+            freq = "1";
         };
 	};
 };

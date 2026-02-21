@@ -40,6 +40,14 @@ void alarm_callback(const struct device *dev, uint16_t id, void *user_data) {
 
 void counter_top_callback(const struct device* dev, void *user_data) {
     LOG_INF("Counter calling you back :) HHHHHHHHHHHHHHHH");
+    for (int i = 0; i < 15; i++) {
+        counter_reset(dev);
+        k_sleep(K_SECONDS(1));
+    }
+}
+
+void counter_top_callback2(const struct device* dev, void *user_data) {
+    LOG_INF("Counter calling you back :) THIS IS #2");
 }
 
 void counter_alarm_callback(const struct device* dev, uint8_t chan_id, uint32_t ticks, void *user_data) {
@@ -133,27 +141,44 @@ int main(void) {
 
     LOG_INF("Setting up counter");
     const struct counter_top_cfg top_cfg = {
-        .ticks = 128,
+        .ticks = 5,
         .flags = 0,
         .callback = counter_top_callback,
         .user_data = NULL,
     };
-    // ret = counter_set_top_value(rv3032_counter, &top_cfg);
-    // if (ret) {
-    //     LOG_ERR("Failed to setup counter top value: %d", ret);
-    //     return 1;
-    // }
-    const struct counter_alarm_cfg alarm_cfg = {
-        .ticks = 128,
+    const struct counter_top_cfg top_cfg2 = {
+        .ticks = 30,
         .flags = 0,
-        .callback = counter_alarm_callback,
+        .callback = counter_top_callback2,
         .user_data = NULL,
     };
-    ret = counter_set_channel_alarm(rv3032_counter, 0, &alarm_cfg);
+    ret = counter_set_top_value(rv3032_counter, &top_cfg);
     if (ret) {
         LOG_ERR("Failed to setup counter top value: %d", ret);
         return 1;
     }
+
+    LOG_INF("Set first one");
+    k_sleep(K_SECONDS(1));
+
+
+    // ret = counter_set_top_value(rv3032_counter, &top_cfg2);
+    // if (ret) {
+    //     LOG_ERR("Failed to setup counter top value 2: %d", ret);
+    //     return 1;
+    // }
+    // LOG_INF("Set second one");
+    // const struct counter_alarm_cfg alarm_cfg = {
+    //     .ticks = 128,
+    //     .flags = 0,
+    //     .callback = counter_alarm_callback,
+    //     .user_data = NULL,
+    // };
+    // ret = counter_set_channel_alarm(rv3032_counter, 0, &alarm_cfg);
+    // if (ret) {
+    //     LOG_ERR("Failed to setup counter top value: %d", ret);
+    //     return 1;
+    // }
     if (counter_start(rv3032_counter)) {
         LOG_ERR("Failed to start counter");
         return 1;
