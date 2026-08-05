@@ -1,11 +1,11 @@
 # DIY Pressure Transducer
-**Note: For the work-in-progress Nordic nRF52840 based redesign, see [the nrf branch](https://github.com/benchittle/pressure-transducer/tree/nrf).** 
+**Note: For the work-in-progress Nordic nRF52840 based redesign, see [the nrf branch](https://github.com/benchittle/pressure-transducer/tree/nrf).**
 
 ![A DIY3 pressure transducer](documentation/DIY3-DIY4/imgs/transducer.jpg)
 
 This repository contains code and hardware specifications for a low cost pressure transducer / data logger designed for monitoring nearshore waves. More than 40 devices using this design have been built and used for past research at the University of Windsor (see [Houser et al. 2024](https://doi.org/10.1080/10402381.2024.2370818)) and an ongoing study at Carleton University.
 
-The design logs absolute pressure (atmospheric pressure + water pressure) and ambient temperature using an MS5803-05BA pressure sensor at a frequency of 1, 2, or 4 Hz. The housing design (borrowed from [Temple et al. 2020](https://drive.google.com/file/d/1AeuLn0KJ6eFY7-9LxLkWqWv8v-XytcFK/view)) can be constructed from parts commonly available at hardware stores, and the electronics can be acquired from component distributers (such as Digi-Key) and a PCB manufacturer (such as JLC PCB). 
+The design logs absolute pressure (atmospheric pressure + water pressure) and ambient temperature using an MS5803-05BA pressure sensor at a frequency of 1, 2, or 4 Hz. The housing design (borrowed from [Temple et al. 2020](https://drive.google.com/file/d/1AeuLn0KJ6eFY7-9LxLkWqWv8v-XytcFK/view)) can be constructed from parts commonly available at hardware stores, and the electronics can be acquired from component distributers (such as Digi-Key) and a PCB manufacturer (such as JLC PCB).
 
 The design uses the ESP32-based Firebeetle, a DS3231 RTC, a microSD card module, and a custom shield PCB as its main components.
 
@@ -65,7 +65,7 @@ The repository is set up as follows:
 
 * [`code/`](./code/)
     * [`data-processing/`](./code/data-processing/) - Python scripts for unpacking and processing collected data
-    
+
     * [`tools/`](./code/tools/) - Miscellaneous scripts
 
     * [`transducer-firmware/`](./code/transducer-firmware/) - Firmware for the DIY3 and DIY4 models written for the Firebeetle ESP32 board using the ESP IDF framework (and some Arduino components). Also contains the HTML for the web dashboard.
@@ -73,3 +73,15 @@ The repository is set up as follows:
 * [`hardware/`](/hardware/) - Contains KiCad projects for different variations of the "shield" PCB which mounts and connects all components.
 
 * [`documentation/`](/documentation/) - User guide and any other relevant info.
+
+
+## Ordering the Shield PCB
+The Shield PCB has to be ordered from a PCB manufacturer directly -- it's a custom design, not something you can get off the shelf. If you've never ordered a PCB before, see the steps below for ordering from [JLCPCB](https://jlcpcb.com/) (not affiliated), which I have used many times.
+1. Download the [PCB gerber files](hardware/DIY4/firebeetle-shield/gerbers/gerbers.zip)
+2. Create an account and start a new order on [JLCPCB](https://jlcpcb.com/). Upload `gerbers.zip`. It should take a moment and then populate a bunch of the fields (e.g. dimensions and price estimate)
+3. Here's the settings I've used:
+    - The only things I change from default are the colour (which is totally optional, green will give you the fastest turnaround time but I like black so it matches with the other electronics) and the surface finish. Adjust the quantity as needed of course.
+    ![JLC PCB settings](documentation/imgs/jlcpcb1.png)
+    ![JLC PCB settings](documentation/imgs/jlcpcb2.png)
+
+4. Save it to your cart and order away! They're in China, so expect a shipping time of at least a week or so (if in North America).
